@@ -8,6 +8,8 @@ import (
 	"github.com/SongZihuan/MyCA/src/utils"
 	"math/big"
 	"net"
+	"net/mail"
+	"net/url"
 	"os"
 	"path"
 	"time"
@@ -386,6 +388,9 @@ func CreateUserCertFromRCA() {
 	fmt.Printf("Org: ")
 	org := ReadString()
 
+	fmt.Printf("Common Name: ")
+	cn := ReadString()
+
 	fmt.Printf("Validity: ")
 	validity := ReadTimeDuration(time.Hour * 24 * 365 * 5)
 
@@ -398,9 +403,11 @@ func CreateUserCertFromRCA() {
 		res := ReadString()
 		if res == "" {
 			break
-		} else {
-			domains = append(domains, res)
+		} else if !utils.IsValidDomain(res) {
+			fmt.Println("Error: not a valid domain")
+			break
 		}
+		domains = append(domains, res)
 	}
 
 	ips := make([]net.IP, 0, 10)
@@ -413,13 +420,116 @@ func CreateUserCertFromRCA() {
 			ip := net.ParseIP(res)
 			if ip == nil {
 				fmt.Println("Error: not a valid ip")
+				break
 			}
 
 			ips = append(ips, ip)
 		}
 	}
 
-	userCert, key, err := cert.CreateCert(cryptoType, keyLength, org, domains, ips, notBefore, notAfter, rcaSerialNumber, rcaCert, rcaKey)
+	fmt.Printf("Now we need to add your email (if you have), do you want to check it from DNS? [yes/no]")
+	checkEmail := ReadYes()
+	StillAddEmail := true
+	if checkEmail {
+		fmt.Printf("Now we will check the email when you add it, do you want to still add it when dns check failed? [yes/no]")
+		StillAddEmail = ReadYes()
+	}
+
+	emails := make([]string, 0, 10)
+	for {
+		fmt.Printf("Enter your email [empty to stop]: ")
+		res := ReadString()
+		if res == "" {
+			break
+		} else {
+			email, err := mail.ParseAddress(res)
+			if err != nil {
+				fmt.Printf("Error: not a valid email (%s)\n", err.Error())
+				break
+			} else if !utils.IsValidEmail(email.Address) {
+				fmt.Println("Error: not a valid email")
+				break
+			} else if checkEmail {
+				if utils.CheckEmailMX(email) {
+					fmt.Printf("OK: email (%s) check success\n", res)
+				} else {
+					if StillAddEmail {
+						fmt.Printf("Warn: email (%s) check failed\n", res)
+					} else {
+						fmt.Printf("Error: email (%s) check failed\n", res)
+						break
+					}
+				}
+			}
+
+			emails = append(emails, email.Address)
+		}
+	}
+
+	urls := make([]*url.URL, 0, 10)
+	for {
+		fmt.Printf("Enter your URL [empty to stop]: ")
+		res := ReadString()
+		if res == "" {
+			break
+		} else {
+			u, err := url.Parse(res)
+			if err != nil {
+				fmt.Printf("Error: not a valid URL (%s)\n", err.Error())
+				break
+			}
+
+			urls = append(urls, u)
+		}
+	}
+
+	domainsR := make([]string, 0, 10)
+	domainsRS := make([]string, 0, 10)
+	ipsR := make([]net.IP, 0, 10)
+	for {
+		fmt.Printf("Enter your domain and it will resolve to ip [empty to stop]: ")
+		res := ReadString()
+		if res == "" {
+			break
+		} else if !utils.IsValidDomain(res) {
+			fmt.Println("Error: not a valid domain")
+			break
+		}
+
+		domainsR = append(domainsR, res)
+
+		ipsN, err := utils.ResolveDomainToIPs(res)
+		if err != nil {
+			fmt.Printf("Error: domain resolve error (%s)\n", err.Error())
+			break
+		} else if ipsN == nil {
+			fmt.Println("Error: domain without ip")
+			break
+		} else {
+			fmt.Printf("Domain %s resolve result: \n", res)
+			for _, i := range ipsN {
+				fmt.Printf("  - %s\n", i.String())
+			}
+			fmt.Printf("Domain %s resolve finished.\n", res)
+		}
+
+		domainsRS = append(domainsRS, res)
+		ipsR = append(ipsR, ipsN...)
+	}
+
+	fmt.Printf("Add the domain in cert? [yes/no]")
+	if ReadYes() {
+		fmt.Printf("Add the all of the domain (include which the resolve failed) in cert? [yes/no]")
+		if ReadYes() {
+			domains = append(domains, domainsR...)
+		} else {
+			domains = append(domains, domainsRS...)
+		}
+	}
+
+	ips = append(ips, ipsR...)
+
+	userCert, key, err := cert.CreateCert(cryptoType, keyLength, org, cn, domains, ips, emails, urls, notBefore, notAfter, rcaSerialNumber, rcaCert, rcaKey)
 	if err != nil {
 		fmt.Println("Error:", err)
 		return
@@ -515,6 +625,9 @@ func CreateUserCertFromICA() {
 	fmt.Printf("Org: ")
 	org := ReadString()
 
+	fmt.Printf("Common Name: ")
+	cn := ReadString()
+
 	fmt.Printf("Validity: ")
 	validity := ReadTimeDuration(time.Hour * 24 * 365 * 5)
 
@@ -548,7 +661,109 @@ func CreateUserCertFromICA() {
 		}
 	}
 
-	userCert, key, err := cert.CreateCert(cryptoType, keyLength, org, domains, ips, notBefore, notAfter, icaSerialNumber, icaCert, icaKey)
+	fmt.Printf("Now we need to add your email (if you have), do you want to check it from DNS? [yes/no]")
+	checkEmail := ReadYes()
+	StillAddEmail := true
+	if checkEmail {
+		fmt.Printf("Now we will check the email when you add it, do you want to still add it when dns check failed? [yes/no]")
+		StillAddEmail = ReadYes()
+	}
+
+	emails := make([]string, 0, 10)
+	for {
+		fmt.Printf("Enter your email [empty to stop]: ")
+		res := ReadString()
+		if res == "" {
+			break
+		} else {
+			email, err := mail.ParseAddress(res)
+			if err != nil {
+				fmt.Printf("Error: not a valid email (%s)\n", err.Error())
+				break
+			} else if !utils.IsValidEmail(email.Address) {
+				fmt.Println("Error: not a valid email")
+				break
+			} else if checkEmail {
+				if utils.CheckEmailMX(email) {
+					fmt.Printf("OK: email (%s) check success\n", res)
+				} else {
+					if StillAddEmail {
+						fmt.Printf("Warn: email (%s) check failed\n", res)
+					} else {
+						fmt.Printf("Error: email (%s) check failed\n", res)
+						break
+					}
+				}
+			}
+
+			emails = append(emails, email.Address)
+		}
+	}
+
+	urls := make([]*url.URL, 0, 10)
+	for {
+		fmt.Printf("Enter your URL [empty to stop]: ")
+		res := ReadString()
+		if res == "" {
+			break
+		} else {
+			u, err := url.Parse(res)
+			if err != nil {
+				fmt.Printf("Error: not a valid URL (%s)\n", err.Error())
+				break
+			}
+
+			urls = append(urls, u)
+		}
+	}
+
+	domainsR := make([]string, 0, 10)
+	domainsRS := make([]string, 0, 10)
+	ipsR := make([]net.IP, 0, 10)
+	for {
+		fmt.Printf("Enter your domain and it will resolve to ip [empty to stop]: ")
+		res := ReadString()
+		if res == "" {
+			break
+		} else if !utils.IsValidDomain(res) {
+			fmt.Println("Error: not a valid domain")
+			break
+		}
+
+		domainsR = append(domainsR, res)
+
+		ipsN, err := utils.ResolveDomainToIPs(res)
+		if err != nil {
+			fmt.Printf("Error: domain resolve error (%s)\n", err.Error())
+			break
+		} else if ipsN == nil {
+			fmt.Println("Error: domain without ip")
+			break
+		} else {
+			fmt.Printf("Domain %s resolve result: \n", res)
+			for _, i := range ipsN {
+				fmt.Printf("  - %s\n", i.String())
+			}
+			fmt.Printf("Domain %s resolve finished.\n", res)
+		}
+
+		domainsRS = append(domainsRS, res)
+		ipsR = append(ipsR, ipsN...)
+	}
+
+	fmt.Printf("Add the domain in cert? [yes/no]")
+	if ReadYes() {
+		fmt.Printf("Add the all of the domain (include which the resolve failed) in cert? [yes/no]")
+		if ReadYes() {
+			domains = append(domains, domainsR...)
+		} else {
+			domains = append(domains, domainsRS...)
+		}
+	}
+
+	ips = append(ips, ipsR...)
+
+	userCert, key, err := cert.CreateCert(cryptoType, keyLength, org, cn, domains, ips, emails, urls, notBefore, notAfter, icaSerialNumber, icaCert, icaKey)
 	if err != nil {
 		fmt.Println("Error:", err)
 		return
@@ -638,6 +853,9 @@ func CreateUserCertSelf() {
 	fmt.Printf("Org: ")
 	org := ReadString()
 
+	fmt.Printf("Common Name: ")
+	cn := ReadString()
+
 	fmt.Printf("Validity: ")
 	validity := ReadTimeDuration(time.Hour * 24 * 365 * 5)
 
@@ -650,9 +868,11 @@ func CreateUserCertSelf() {
 		res := ReadString()
 		if res == "" {
 			break
-		} else {
-			domains = append(domains, res)
+		} else if !utils.IsValidDomain(res) {
+			fmt.Println("Error: not a valid domain")
+			break
 		}
+		domains = append(domains, res)
 	}
 
 	ips := make([]net.IP, 0, 10)
@@ -665,13 +885,116 @@ func CreateUserCertSelf() {
 			ip := net.ParseIP(res)
 			if ip == nil {
 				fmt.Println("Error: not a valid ip")
+				break
 			}
 
 			ips = append(ips, ip)
 		}
 	}
 
-	userCert, key, err := cert.CreateSelfCert(cryptoType, keyLength, org, domains, ips, notBefore, notAfter)
+	fmt.Printf("Now we need to add your email (if you have), do you want to check it from DNS? [yes/no]")
+	checkEmail := ReadYes()
+	StillAddEmail := true
+	if checkEmail {
+		fmt.Printf("Now we will check the email when you add it, do you want to still add it when dns check failed? [yes/no]")
+		StillAddEmail = ReadYes()
+	}
+
+	emails := make([]string, 0, 10)
+	for {
+		fmt.Printf("Enter your email [empty to stop]: ")
+		res := ReadString()
+		if res == "" {
+			break
+		} else {
+			email, err := mail.ParseAddress(res)
+			if err != nil {
+				fmt.Printf("Error: not a valid email (%s)\n", err.Error())
+				break
+			} else if !utils.IsValidEmail(email.Address) {
+				fmt.Println("Error: not a valid email")
+				break
+			} else if checkEmail {
+				if utils.CheckEmailMX(email) {
+					fmt.Printf("OK: email (%s) check success\n", res)
+				} else {
+					if StillAddEmail {
+						fmt.Printf("Warn: email (%s) check failed\n", res)
+					} else {
+						fmt.Printf("Error: email (%s) check failed\n", res)
+						break
+					}
+				}
+			}
+
+			emails = append(emails, email.Address)
+		}
+	}
+
+	urls := make([]*url.URL, 0, 10)
+	for {
+		fmt.Printf("Enter your URL [empty to stop]: ")
+		res := ReadString()
+		if res == "" {
+			break
+		} else {
+			u, err := url.Parse(res)
+			if err != nil {
+				fmt.Printf("Error: not a valid URL (%s)\n", err.Error())
+				break
+			}
+
+			urls = append(urls, u)
+		}
+	}
+
+	domainsR := make([]string, 0, 10)
+	domainsRS := make([]string, 0, 10)
+	ipsR := make([]net.IP, 0, 10)
+	for {
+		fmt.Printf("Enter your domain and it will resolve to ip [empty to stop]: ")
+		res := ReadString()
+		if res == "" {
+			break
+		} else if !utils.IsValidDomain(res) {
+			fmt.Println("Error: not a valid domain")
+			break
+		}
+
+		domainsR = append(domainsR, res)
+
+		ipsN, err := utils.ResolveDomainToIPs(res)
+		if err != nil {
+			fmt.Printf("Error: domain resolve error (%s)\n", err.Error())
+			break
+		} else if ipsN == nil {
+			fmt.Println("Error: domain without ip")
+			break
+		} else {
+			fmt.Printf("Domain %s resolve result: \n", res)
+			for _, i := range ipsN {
+				fmt.Printf("  - %s\n", i.String())
+			}
+			fmt.Printf("Domain %s resolve finished.\n", res)
+		}
+
+		domainsRS = append(domainsRS, res)
+		ipsR = append(ipsR, ipsN...)
+	}
+
+	fmt.Printf("Add the domain in cert? [yes/no]")
+	if ReadYes() {
+		fmt.Printf("Add the all of the domain (include which the resolve failed) in cert? [yes/no]")
+		if ReadYes() {
+			domains = append(domains, domainsR...)
+		} else {
+			domains = append(domains, domainsRS...)
+		}
+	}
+
+	ips = append(ips, ipsR...)
+
+	userCert, key, err := cert.CreateSelfCert(cryptoType, keyLength, org, cn, domains, ips, emails, urls, notBefore, notAfter)
 	if err != nil {
 		fmt.Println("Error:", err)
 		return

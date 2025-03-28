@@ -11,21 +11,27 @@ import (
 	"github.com/SongZihuan/MyCA/src/utils"
 	"math/big"
 	"net"
+	"net/url"
 	"time"
 )
 
 // CreateCert 创建由CA签名的IP、域名证书
-func CreateCert(cryptoType utils.CryptoType, keyLength int, org string, domains []string, ips []net.IP, notBefore time.Time, notAfter time.Time, caSerialNumber *utils.FileTack[*big.Int], ca *x509.Certificate, caKey crypto.PrivateKey) (*x509.Certificate, crypto.PrivateKey, error) {
+func CreateCert(cryptoType utils.CryptoType, keyLength int, org string, cn string, domains []string, ips []net.IP, emails []string, urls []*url.URL, notBefore time.Time, notAfter time.Time, caSerialNumber *utils.FileTack[*big.Int], ca *x509.Certificate, caKey crypto.PrivateKey) (*x509.Certificate, crypto.PrivateKey, error) {
 	var privKey crypto.PrivateKey
 	var pubKey interface{}
 
-	cn := ""
-	if len(domains) == 0 && len(ips) == 0 {
-		return nil, nil, fmt.Errorf("no domains or IPs")
-	} else if len(domains) != 0 {
-		cn = domains[0]
-	} else if len(ips) != 0 {
-		cn = ips[0].String()
+	if cn == "" {
+		if len(domains) != 0 {
+			cn = domains[0]
+		} else if len(ips) != 0 {
+			cn = ips[0].String()
+		} else if len(emails) != 0 {
+			cn = emails[0]
+		} else if len(urls) != 0 {
+			cn = urls[0].String()
+		} else {
+			cn = utils.RandStr(6 + utils.RandIntn(3)) // 6-8位随机字符串
+		}
 	}
 
 	switch cryptoType {
@@ -94,6 +100,8 @@ func CreateCert(cryptoType utils.CryptoType, keyLength int, org string, domains 
 		IsCA:                  false,
 		DNSNames:              domains,
 		IPAddresses:           ips,
+		EmailAddresses:        emails,
+		URIs:                  urls,
 	}
 
 	derBytes, err := x509.CreateCertificate(utils.Rander(), template, ca, pubKey, caKey)
@@ -110,17 +118,22 @@ func CreateCert(cryptoType utils.CryptoType, keyLength int, org string, domains 
 }
 
 // CreateSelfCert 创建自签名域名、IP证书
-func CreateSelfCert(cryptoType utils.CryptoType, keyLength int, org string, domains []string, ips []net.IP, notBefore time.Time, notAfter time.Time) (*x509.Certificate, crypto.PrivateKey, error) {
+func CreateSelfCert(cryptoType utils.CryptoType, keyLength int, org string, cn string, domains []string, ips []net.IP, emails []string, urls []*url.URL, notBefore time.Time, notAfter time.Time) (*x509.Certificate, crypto.PrivateKey, error) {
 	var privKey crypto.PrivateKey
 	var pubKey interface{}
 
-	cn := ""
-	if len(domains) == 0 && len(ips) == 0 {
-		return nil, nil, fmt.Errorf("no domains or IPs")
-	} else if len(domains) != 0 {
-		cn = domains[0]
-	} else if len(ips) != 0 {
-		cn = ips[0].String()
+	if cn == "" {
+		if len(domains) != 0 {
+			cn = domains[0]
+		} else if len(ips) != 0 {
+			cn = ips[0].String()
+		} else if len(emails) != 0 {
+			cn = emails[0]
+		} else if len(urls) != 0 {
+			cn = urls[0].String()
+		} else {
+			cn = utils.RandStr(6 + utils.RandIntn(3)) // 6-8位随机字符串
+		}
 	}
 
 	switch cryptoType {
@@ -187,6 +200,8 @@ func CreateSelfCert(cryptoType utils.CryptoType, keyLength int, org string, doma
 		IsCA:                  false,
 		DNSNames:              domains,
 		IPAddresses:           ips,
+		EmailAddresses:        emails,
+		URIs:                  urls,
 	}
 
 	derBytes, err := x509.CreateCertificate(utils.Rander(), template, template, pubKey, privKey)
