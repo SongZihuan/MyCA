@@ -13,6 +13,26 @@ func IsExists(path string) bool {
 	return true
 }
 
+func IsFile(path string) bool {
+	stat, err := os.Stat(path)
+	if err != nil && errors.Is(err, os.ErrNotExist) {
+		return false
+	} else if stat.IsDir() {
+		return false
+	}
+	return true
+}
+
+func IsDir(path string) bool {
+	stat, err := os.Stat(path)
+	if err != nil && errors.Is(err, os.ErrNotExist) {
+		return false
+	} else if stat.IsDir() {
+		return true
+	}
+	return false
+}
+
 func ReadDir(dirPath string) ([]string, error) {
 	entry, err := os.ReadDir(dirPath)
 	if err != nil {

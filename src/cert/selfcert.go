@@ -1,3 +1,7 @@
+// Copyright 2025 MyCA Authors. All rights reserved.
+// Use of this source code is governed by a MIT-style
+// license that can be found in the LICENSE file.
+
 package cert
 
 import (
@@ -18,35 +22,30 @@ import (
 	"time"
 )
 
-type CAInfo interface {
-	NewCert() *big.Int
-	GetIssuingCertificateURL() []string
-	GetOCSPServer() []string
-	GetCRLDistributionPoints() []string
+type SelfCertInfo struct {
+	OCSPServer            []string
+	IssuingCertificateURL []string
+	CRLDistributionPoints []string
+
+	FilePath string `gob:"-"`
 }
 
-type CertInfo struct {
-	SerialNumber       *big.Int
-	SelfCertificateURL []string
-	CA                 CAInfo
-	FilePath           string `gob:"-"`
+func init() {
+	gob.Register(SelfCertInfo{})
 }
 
-func NewCertInfo(filepath string, ca CAInfo) (*CertInfo, error) {
-	info := &CertInfo{
-		SerialNumber: big.NewInt(0),
-		FilePath:     filepath,
-		CA:           ca,
+func NewSelfCertInfo(filepath string, ocsp []string, issuerURL []string, crlURL []string) (*SelfCertInfo, error) {
+	info := &SelfCertInfo{
+		OCSPServer:            ocsp,
+		IssuingCertificateURL: issuerURL,
+		CRLDistributionPoints: crlURL,
+		FilePath:              filepath,
 	}
 
 	return info, nil
 }
 
-func init() {
-	gob.Register(CertInfo{})
-}
-
-func GetCertInfo(filepath string) (*CertInfo, error) {
+func GetRCAInfo(filepath string) (*SelfCertInfo, error) {
 	file, err := os.Open(filepath)
 	if err != nil {
 		return nil, err
@@ -55,7 +54,7 @@ func GetCertInfo(filepath string) (*CertInfo, error) {
 		_ = file.Close()
 	}()
 
-	var res CertInfo
+	var res SelfCertInfo
 	decoder := gob.NewDecoder(file)
 	err = decoder.Decode(&res)
 	if err != nil {
@@ -67,7 +66,7 @@ func GetCertInfo(filepath string) (*CertInfo, error) {
 	return &res, nil
 }
 
-func (info *CertInfo) SaveCertInfo() error {
+func (info *SelfCertInfo) SaveSelfCert() error {
 	file, err := os.OpenFile(info.FilePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
 	if err != nil {
 		return err
@@ -85,25 +84,30 @@ func (info *CertInfo) SaveCertInfo() error {
 	return nil
 }
 
-func (info *CertInfo) GetSerialNumber() *big.Int {
-	info.SerialNumber = info.CA.NewCert()
-	return info.SerialNumber
+func (info *SelfCertInfo) NewCert() *big.Int {
+	return big.NewInt(1)
 }
 
-func (info *CertInfo) NewCert() *big.Int {
-	panic("Not a CA!")
+func (info *SelfCertInfo) GetIssuingCertificateURL() []string {
+	return info.IssuingCertificateURL
 }
 
-func (info *CertInfo) GetIssuingCertificateURL() []string {
-	panic("Not a CA!")
+func (info *SelfCertInfo) GetOCSPServer() []string {
+	return info.OCSPServer
 }
 
-// CreateCert 创建由CA签名的IP、域名证书
-func CreateCert(infoFilePath string, caInfo CAInfo, cryptoType utils.CryptoType, keyLength int, org string, cn string, domains []string, ips []net.IP, emails []string, urls []*url.URL, notBefore time.Time, notAfter time.Time, ca *x509.Certificate, caKey crypto.PrivateKey) (*x509.Certificate, crypto.PrivateKey, *CertInfo, error) {
+func (info *SelfCertInfo) GetCRLDistributionPoints() []string {
+	return info.CRLDistributionPoints
+}
+
+// CreateSelfCert 创建自签名域名、IP证书
+func CreateSelfCert(infoFilePath string, cryptoType utils.CryptoType, keyLength int, org string, cn string, domains []string, ips []net.IP, emails []string, urls []*url.URL, ocsp []string, selfURL []string, crlURL []string, notBefore time.Time, notAfter time.Time) (*x509.Certificate, crypto.PrivateKey, *SelfCertInfo, error) {
 	var privKey crypto.PrivateKey
 	var pubKey interface{}
 
-	info, err := NewCertInfo(infoFilePath, caInfo)
+	org, cn = sysinfo.CreateCASubjectLong(org, cn, domains, ips, emails, urls)
+
+	info, err := NewSelfCertInfo(infoFilePath, ocsp, selfURL, crlURL)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -145,6 +149,10 @@ func CreateCert(infoFilePath string, caInfo CAInfo, cryptoType utils.CryptoType,
 		return nil, nil, nil, fmt.Errorf("unsupported crypto type: %s", cryptoType)
 	}
 
+	if org == "" {
+		org = "MyOrg"
+	}
+
 	if notBefore.Equal(time.Time{}) {
 		notBefore = time.Now()
 	}
@@ -153,10 +161,8 @@ func CreateCert(infoFilePath string, caInfo CAInfo, cryptoType utils.CryptoType,
 		notAfter = notBefore.Add(time.Hour * 24 * 365 * 5) // 5年
 	}
 
-	org, cn = sysinfo.CreateCASubjectLong(org, cn, domains, ips, emails, urls)
-
 	template := &x509.Certificate{
-		SerialNumber: info.GetSerialNumber(),
+		SerialNumber: big.NewInt(1),
 		Subject: pkix.Name{
 			Organization: []string{org},
 			CommonName:   cn,
@@ -173,13 +179,12 @@ func CreateCert(infoFilePath string, caInfo CAInfo, cryptoType utils.CryptoType,
 		EmailAddresses:        emails,
 		URIs:                  urls,
 
-		// 此处CA证书和终端证书不同，CA显示自己的吊销列表，终端证书显示对于CA的吊销列表
-		OCSPServer:            info.CA.GetOCSPServer(),
-		IssuingCertificateURL: info.CA.GetIssuingCertificateURL(),
-		CRLDistributionPoints: info.CA.GetCRLDistributionPoints(),
+		OCSPServer:            info.OCSPServer,
+		IssuingCertificateURL: info.IssuingCertificateURL,
+		CRLDistributionPoints: info.CRLDistributionPoints,
 	}
 
-	derBytes, err := x509.CreateCertificate(utils.Rander(), template, ca, pubKey, caKey)
+	derBytes, err := x509.CreateCertificate(utils.Rander(), template, template, pubKey, privKey)
 	if err != nil {
 		return nil, nil, nil, err
 	}

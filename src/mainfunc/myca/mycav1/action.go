@@ -5,8 +5,8 @@ import (
 	"github.com/SongZihuan/MyCA/src/cert"
 	"github.com/SongZihuan/MyCA/src/ica"
 	"github.com/SongZihuan/MyCA/src/rootca"
+	"github.com/SongZihuan/MyCA/src/sysinfo"
 	"github.com/SongZihuan/MyCA/src/utils"
-	"math/big"
 	"net"
 	"net/mail"
 	"net/url"
@@ -67,36 +67,104 @@ func CreateRCA() {
 	notBefore := time.Now()
 	notAfter := notBefore.Add(validity)
 
-	caCert, key, err := rootca.CreateRCA(cryptoType, keyLength, org, cn, notBefore, notAfter)
+	ocspURLs := make([]string, 0, 10)
+	for {
+		fmt.Printf("Enter your OCSP Server URL [empty to stop]: ")
+		res := ReadString()
+		if res == "" {
+			break
+		} else {
+			u, err := url.Parse(res)
+			if err != nil {
+				fmt.Printf("Error: not a valid URL (%s)\n", err.Error())
+				break
+			} else if u.Scheme != "http" && u.Scheme != "https" {
+				fmt.Println("Error: not a valid HTTP/HTTPS URL")
+				break
+			}
+
+			ocspURLs = append(ocspURLs, u.String())
+		}
+	}
+
+	issurURLs := make([]string, 0, 10)
+	for {
+		fmt.Printf("Enter your Issuing Certificate URL [empty to stop]: ")
+		res := ReadString()
+		if res == "" {
+			break
+		} else {
+			u, err := url.Parse(res)
+			if err != nil {
+				fmt.Printf("Error: not a valid URL (%s)\n", err.Error())
+				break
+			} else if u.Scheme != "http" && u.Scheme != "https" {
+				fmt.Println("Error: not a valid HTTP/HTTPS URL")
+				break
+			}
+
+			issurURLs = append(issurURLs, u.String())
+		}
+	}
+
+	crlURLs := make([]string, 0, 10)
+	for {
+		fmt.Printf("Enter your CRL Distribution Points (URL) [empty to stop]: ")
+		res := ReadString()
+		if res == "" {
+			break
+		} else {
+			u, err := url.Parse(res)
+			if err != nil {
+				fmt.Printf("Error: not a valid URL (%s)\n", err.Error())
+				break
+			} else if u.Scheme != "http" && u.Scheme != "https" {
+				fmt.Println("Error: not a valid HTTP/HTTPS URL")
+				break
+			}
+
+			crlURLs = append(crlURLs, u.String())
+		}
+	}
+
+	fmt.Printf("Set a password for private key [empty is no password]: ")
+	password := ReadPassword()
+
+	org, cn = sysinfo.CreateCASubject(org, cn)
+
+	dirPath := path.Join(home, "rca", fmt.Sprintf("%s-%s", org, cn))
+	infoFile := path.Join(dirPath, "rca-info.gob")
+	cert1Path := path.Join(dirPath, "cert.pem")
+	cert2Path := path.Join(dirPath, "cert.cer")
+	fullchain1Path := path.Join(dirPath, "fullchain.pem")
+	fullchain2Path := path.Join(dirPath, "fullchain.cer")
+	keyPath := path.Join(dirPath, "key.pem")
+
+	if utils.IsExists(dirPath) {
+		fmt.Printf("There is a duplicate file, it will be overwritten. Do you confirm to save the certificate?")
+		if !ReadBoolDefaultNoPrint() {
+			return
+		}
+	} else {
+		fmt.Printf("Do you confirm to save the certificate?")
+		if !ReadBoolDefaultYesPrint() {
+			return
+		}
+	}
+
+	err := os.MkdirAll(dirPath, 0600)
 	if err != nil {
 		fmt.Println("Error:", err)
 		return
 	}
 
-	dirPath := path.Join(home, "rca", fmt.Sprintf("%s-%s", caCert.Subject.Organization[0], caCert.Subject.CommonName))
-	cert1Path := path.Join(dirPath, "cert.pem")
-	cert2Path := path.Join(dirPath, "cert.cer")
-	fullchain1Path := path.Join(dirPath, "fullchain.pem")
-	fullchain2Path := path.Join(dirPath, "fullchain.cer")
-	serialNumberPath := path.Join(dirPath, "serial.num")
-	keyPath := path.Join(dirPath, "key.pem")
-
-	if utils.IsExists(cert1Path) || utils.IsExists(cert2Path) || utils.IsExists(fullchain1Path) || utils.IsExists(fullchain2Path) || utils.IsExists(keyPath) {
-		fmt.Printf("There is a duplicate file, it will be overwritten. Do you confirm to save the certificate? [yes/no] ")
-		if !ReadYesMust() {
-			return
-		}
-	} else {
-		fmt.Printf("Do you confirm to save the certificate? [yes/no] ")
-		if !ReadYes() {
-			return
-		}
+	caCert, key, rcaInfo, err := rootca.CreateRCA(infoFile, cryptoType, keyLength, org, cn, ocspURLs, issurURLs, crlURLs, notBefore, notAfter)
+	if err != nil {
+		fmt.Println("Error:", err)
+		return
 	}
 
-	fmt.Printf("Set a password for private key: ")
-	password := ReadPassword()
-
-	err = os.MkdirAll(dirPath, 0600)
+	err = rcaInfo.SaveRCAInfo()
 	if err != nil {
 		fmt.Println("Error:", err)
 		return
@@ -114,17 +182,11 @@ func CreateRCA() {
 		return
 	}
 
-	err = utils.WriteBigIntToFile(serialNumberPath, big.NewInt(0))
-	if err != nil {
-		fmt.Println("Error:", err)
-		return
-	}
-
 	fmt.Println("Success, save directory: ", dirPath)
 }
 
 func CreateICAFromRCA() {
-	rcaCert, rcaKey, rcaFullchain, rcaSerialNumber, err := LoadRCA()
+	rcaCert, rcaKey, rcaFullchain, rcaInfo, err := LoadRCA()
 	if err != nil {
 		fmt.Println("Error:", err.Error())
 		return
@@ -167,42 +229,110 @@ func CreateICAFromRCA() {
 	fmt.Printf("Common Name: ")
 	cn := ReadString()
 
+	org, cn = sysinfo.CreateCASubject(org, cn)
+
 	fmt.Printf("Validity: ")
 	validity := ReadTimeDuration(time.Hour * 24 * 365 * 5)
 
 	notBefore := time.Now()
 	notAfter := notBefore.Add(validity)
 
-	caCert, key, err := ica.CreateICA(cryptoType, keyLength, org, cn, notBefore, notAfter, rcaSerialNumber, rcaCert, rcaKey)
-	if err != nil {
-		fmt.Println("Error:", err)
-		return
+	selfOcspURLs := make([]string, 0, 10)
+	for {
+		fmt.Printf("Enter your OCSP Server URL [empty to stop]: ")
+		res := ReadString()
+		if res == "" {
+			break
+		} else {
+			u, err := url.Parse(res)
+			if err != nil {
+				fmt.Printf("Error: not a valid URL (%s)\n", err.Error())
+				break
+			} else if u.Scheme != "http" && u.Scheme != "https" {
+				fmt.Println("Error: not a valid HTTP/HTTPS URL")
+				break
+			}
+
+			selfOcspURLs = append(selfOcspURLs, u.String())
+		}
 	}
 
-	dirPath := path.Join(home, "ica", fmt.Sprintf("%s-%s", caCert.Subject.Organization[0], caCert.Subject.CommonName))
-	cert1Path := path.Join(dirPath, "cert.pem")
-	cert2Path := path.Join(dirPath, "cert.cer")
-	fullchain1Path := path.Join(dirPath, "fullchain.pem")
-	fullchain2Path := path.Join(dirPath, "fullchain.cer")
-	serialNumberPath := path.Join(dirPath, "serial.num")
-	keyPath := path.Join(dirPath, "key.pem")
+	selfIssurURLs := make([]string, 0, 10)
+	for {
+		fmt.Printf("Enter your Issuing Certificate URL [empty to stop]: ")
+		res := ReadString()
+		if res == "" {
+			break
+		} else {
+			u, err := url.Parse(res)
+			if err != nil {
+				fmt.Printf("Error: not a valid URL (%s)\n", err.Error())
+				break
+			} else if u.Scheme != "http" && u.Scheme != "https" {
+				fmt.Println("Error: not a valid HTTP/HTTPS URL")
+				break
+			}
 
-	if utils.IsExists(cert1Path) || utils.IsExists(cert2Path) || utils.IsExists(fullchain1Path) || utils.IsExists(fullchain2Path) || utils.IsExists(keyPath) {
-		fmt.Printf("There is a duplicate file, it will be overwritten. Do you confirm to save the certificate? [yes/no] ")
-		if !ReadYesMust() {
-			return
+			selfIssurURLs = append(selfIssurURLs, u.String())
 		}
-	} else {
-		fmt.Printf("Do you confirm to save the certificate? [yes/no] ")
-		if !ReadYes() {
-			return
+	}
+
+	crlURLs := make([]string, 0, 10)
+	for {
+		fmt.Printf("Enter your CRL Distribution Points (URL) [empty to stop]: ")
+		res := ReadString()
+		if res == "" {
+			break
+		} else {
+			u, err := url.Parse(res)
+			if err != nil {
+				fmt.Printf("Error: not a valid URL (%s)\n", err.Error())
+				break
+			} else if u.Scheme != "http" && u.Scheme != "https" {
+				fmt.Println("Error: not a valid HTTP/HTTPS URL")
+				break
+			}
+
+			crlURLs = append(crlURLs, u.String())
 		}
 	}
 
 	fmt.Printf("Set a password for private key: ")
 	password := ReadPassword()
 
+	dirPath := path.Join(home, "ica", fmt.Sprintf("%s-%s", org, cn))
+	infoFile := path.Join(dirPath, "rca-info.gob")
+	cert1Path := path.Join(dirPath, "cert.pem")
+	cert2Path := path.Join(dirPath, "cert.cer")
+	fullchain1Path := path.Join(dirPath, "fullchain.pem")
+	fullchain2Path := path.Join(dirPath, "fullchain.cer")
+	keyPath := path.Join(dirPath, "key.pem")
+
+	if utils.IsExists(dirPath) {
+		fmt.Printf("There is a duplicate file, it will be overwritten. Do you confirm to save the certificate?")
+		if !ReadBoolDefaultNoPrint() {
+			return
+		}
+	} else {
+		fmt.Printf("Do you confirm to save the certificate?")
+		if !ReadBoolDefaultYesPrint() {
+			return
+		}
+	}
+
 	err = os.MkdirAll(dirPath, 0600)
+	if err != nil {
+		fmt.Println("Error:", err)
+		return
+	}
+
+	caCert, key, icaInfo, err := ica.CreateICA(infoFile, rcaInfo, cryptoType, keyLength, org, cn, selfOcspURLs, selfIssurURLs, crlURLs, notBefore, notAfter, rcaCert, rcaKey)
+	if err != nil {
+		fmt.Println("Error:", err)
+		return
+	}
+
+	err = icaInfo.SaveICAInfo()
 	if err != nil {
 		fmt.Println("Error:", err)
 		return
@@ -220,23 +350,11 @@ func CreateICAFromRCA() {
 		return
 	}
 
-	err = utils.WriteBigIntToFile(serialNumberPath, big.NewInt(0))
-	if err != nil {
-		fmt.Println("Error:", err)
-		return
-	}
-
-	err = rcaSerialNumber.Save()
-	if err != nil {
-		fmt.Println("Error:", err)
-		return
-	}
-
 	fmt.Println("Success, save directory: ", dirPath)
 }
 
 func CreateICAFromICA() {
-	icaCert, icaKey, icaFullchain, icaSerialNumber, err := LoadICA()
+	icaCert, icaKey, icaFullchain, icaInfo, err := LoadICA()
 	if err != nil {
 		fmt.Println("Error:", err.Error())
 		return
@@ -279,42 +397,110 @@ func CreateICAFromICA() {
 	fmt.Printf("Common Name: ")
 	cn := ReadString()
 
+	org, cn = sysinfo.CreateCASubject(org, cn)
+
 	fmt.Printf("Validity: ")
 	validity := ReadTimeDuration(time.Hour * 24 * 365 * 5)
 
-	notBefore := time.Now()
-	notAfter := notBefore.Add(validity)
+	ocspURLs := make([]string, 0, 10)
+	for {
+		fmt.Printf("Enter your OCSP Server URL [empty to stop]: ")
+		res := ReadString()
+		if res == "" {
+			break
+		} else {
+			u, err := url.Parse(res)
+			if err != nil {
+				fmt.Printf("Error: not a valid URL (%s)\n", err.Error())
+				break
+			} else if u.Scheme != "http" && u.Scheme != "https" {
+				fmt.Println("Error: not a valid HTTP/HTTPS URL")
+				break
+			}
 
-	caCert, key, err := ica.CreateICA(cryptoType, keyLength, org, cn, notBefore, notAfter, icaSerialNumber, icaCert, icaKey)
-	if err != nil {
-		fmt.Println("Error:", err)
-		return
+			ocspURLs = append(ocspURLs, u.String())
+		}
 	}
 
-	dirPath := path.Join(home, "ica", fmt.Sprintf("%s-%s", caCert.Subject.Organization[0], caCert.Subject.CommonName))
-	cert1Path := path.Join(dirPath, "cert.pem")
-	cert2Path := path.Join(dirPath, "cert.cer")
-	fullchain1Path := path.Join(dirPath, "fullchain.pem")
-	fullchain2Path := path.Join(dirPath, "fullchain.cer")
-	serialNumberPath := path.Join(dirPath, "serial.num")
-	keyPath := path.Join(dirPath, "key.pem")
+	issurURLs := make([]string, 0, 10)
+	for {
+		fmt.Printf("Enter your Issuing Certificate URL [empty to stop]: ")
+		res := ReadString()
+		if res == "" {
+			break
+		} else {
+			u, err := url.Parse(res)
+			if err != nil {
+				fmt.Printf("Error: not a valid URL (%s)\n", err.Error())
+				break
+			} else if u.Scheme != "http" && u.Scheme != "https" {
+				fmt.Println("Error: not a valid HTTP/HTTPS URL")
+				break
+			}
 
-	if utils.IsExists(cert1Path) || utils.IsExists(cert2Path) || utils.IsExists(fullchain1Path) || utils.IsExists(fullchain2Path) || utils.IsExists(keyPath) {
-		fmt.Printf("There is a duplicate file, it will be overwritten. Do you confirm to save the certificate? [yes/no] ")
-		if !ReadYesMust() {
-			return
+			issurURLs = append(issurURLs, u.String())
 		}
-	} else {
-		fmt.Printf("Do you confirm to save the certificate? [yes/no] ")
-		if !ReadYes() {
-			return
+	}
+
+	crlURLs := make([]string, 0, 10)
+	for {
+		fmt.Printf("Enter your CRL Distribution Points (URL) [empty to stop]: ")
+		res := ReadString()
+		if res == "" {
+			break
+		} else {
+			u, err := url.Parse(res)
+			if err != nil {
+				fmt.Printf("Error: not a valid URL (%s)\n", err.Error())
+				break
+			} else if u.Scheme != "http" && u.Scheme != "https" {
+				fmt.Println("Error: not a valid HTTP/HTTPS URL")
+				break
+			}
+
+			crlURLs = append(crlURLs, u.String())
 		}
 	}
 
 	fmt.Printf("Set a password for private key: ")
 	password := ReadPassword()
 
+	notBefore := time.Now()
+	notAfter := notBefore.Add(validity)
+
+	dirPath := path.Join(home, "ica", fmt.Sprintf("%s-%s", org, cn))
+	infoFile := path.Join(dirPath, "ica-info.gob")
+	cert1Path := path.Join(dirPath, "cert.pem")
+	cert2Path := path.Join(dirPath, "cert.cer")
+	fullchain1Path := path.Join(dirPath, "fullchain.pem")
+	fullchain2Path := path.Join(dirPath, "fullchain.cer")
+	keyPath := path.Join(dirPath, "key.pem")
+
+	if utils.IsExists(cert1Path) || utils.IsExists(cert2Path) || utils.IsExists(fullchain1Path) || utils.IsExists(fullchain2Path) || utils.IsExists(keyPath) {
+		fmt.Printf("There is a duplicate file, it will be overwritten. Do you confirm to save the certificate?")
+		if !ReadBoolDefaultNoPrint() {
+			return
+		}
+	} else {
+		fmt.Printf("Do you confirm to save the certificate?")
+		if !ReadBoolDefaultYesPrint() {
+			return
+		}
+	}
+
 	err = os.MkdirAll(dirPath, 0600)
+	if err != nil {
+		fmt.Println("Error:", err)
+		return
+	}
+
+	caCert, key, newIcaInfo, err := ica.CreateICA(infoFile, icaInfo, cryptoType, keyLength, org, cn, ocspURLs, issurURLs, crlURLs, notBefore, notAfter, icaCert, icaKey)
+	if err != nil {
+		fmt.Println("Error:", err)
+		return
+	}
+
+	err = newIcaInfo.SaveICAInfo()
 	if err != nil {
 		fmt.Println("Error:", err)
 		return
@@ -332,23 +518,11 @@ func CreateICAFromICA() {
 		return
 	}
 
-	err = utils.WriteBigIntToFile(serialNumberPath, big.NewInt(0))
-	if err != nil {
-		fmt.Println("Error:", err)
-		return
-	}
-
-	err = icaSerialNumber.Save()
-	if err != nil {
-		fmt.Println("Error:", err)
-		return
-	}
-
 	fmt.Println("Success, save directory: ", dirPath)
 }
 
 func CreateUserCertFromRCA() {
-	rcaCert, rcaKey, rcaFullchain, rcaSerialNumber, err := LoadRCA()
+	rcaCert, rcaKey, rcaFullchain, rcaInfo, err := LoadRCA()
 	if err != nil {
 		fmt.Println("Error:", err.Error())
 		return
@@ -427,12 +601,12 @@ func CreateUserCertFromRCA() {
 		}
 	}
 
-	fmt.Printf("Now we need to add your email (if you have), do you want to check it from DNS? [yes/no]")
-	checkEmail := ReadYes()
+	fmt.Printf("Now we need to add your email (if you have), do you want to check it from DNS? ")
+	checkEmail := ReadBoolDefaultYesPrint()
 	StillAddEmail := true
 	if checkEmail {
-		fmt.Printf("Now we will check the email when you add it, do you want to still add it when dns check failed? [yes/no]")
-		StillAddEmail = ReadYes()
+		fmt.Printf("Now we will check the email when you add it, do you want to still add it when dns check failed? ")
+		StillAddEmail = ReadBoolDefaultYesPrint()
 	}
 
 	emails := make([]string, 0, 10)
@@ -517,10 +691,10 @@ func CreateUserCertFromRCA() {
 		ipsR = append(ipsR, ipsN...)
 	}
 
-	fmt.Printf("Add the domain in cert? [yes/no]")
-	if ReadYes() {
-		fmt.Printf("Add the all of the domain (include which the resolve failed) in cert? [yes/no]")
-		if ReadYes() {
+	fmt.Printf("Add the domain in cert? ")
+	if ReadBoolDefaultYesPrint() {
+		fmt.Printf("Add the all of the domain (include which the resolve failed) in cert? ")
+		if ReadBoolDefaultYesPrint() {
 			domains = append(domains, domainsR...)
 		} else {
 			domains = append(domains, domainsRS...)
@@ -529,13 +703,13 @@ func CreateUserCertFromRCA() {
 
 	ips = append(ips, ipsR...)
 
-	userCert, key, err := cert.CreateCert(cryptoType, keyLength, org, cn, domains, ips, emails, urls, notBefore, notAfter, rcaSerialNumber, rcaCert, rcaKey)
-	if err != nil {
-		fmt.Println("Error:", err)
-		return
-	}
+	org, cn = sysinfo.CreateCASubjectLong(org, cn, domains, ips, emails, urls)
 
-	dirPath := path.Join(home, "cert", fmt.Sprintf("%s-%s-%s-%s", userCert.Subject.Organization[0], rcaCert.Subject.CommonName, userCert.Subject.CommonName, userCert.NotBefore.Format("2006-01-02-15-04-05")))
+	fmt.Printf("Set a password for private key: ")
+	password := ReadPassword()
+
+	dirPath := path.Join(home, "cert", fmt.Sprintf("%s-%s-%s-%s-%s", rcaCert.Subject.Organization[0], rcaCert.Subject.CommonName, org, cn, notBefore.Format("2006-01-02-15-04-05")))
+	infoPath := path.Join(dirPath, "cert-info.gob")
 	cert1Path := path.Join(dirPath, "cert.pem")
 	cert2Path := path.Join(dirPath, "cert.cer")
 	fullchain1Path := path.Join(dirPath, "fullchain.pem")
@@ -543,21 +717,30 @@ func CreateUserCertFromRCA() {
 	keyPath := path.Join(dirPath, "key.pem")
 
 	if utils.IsExists(cert1Path) || utils.IsExists(cert2Path) || utils.IsExists(fullchain1Path) || utils.IsExists(fullchain2Path) || utils.IsExists(keyPath) {
-		fmt.Printf("There is a duplicate file, it will be overwritten. Do you confirm to save the certificate? [yes/no] ")
-		if !ReadYesMust() {
+		fmt.Printf("There is a duplicate file, it will be overwritten. Do you confirm to save the certificate?")
+		if !ReadBoolDefaultNoPrint() {
 			return
 		}
 	} else {
-		fmt.Printf("Do you confirm to save the certificate? [yes/no] ")
-		if !ReadYes() {
+		fmt.Printf("Do you confirm to save the certificate?")
+		if !ReadBoolDefaultYesPrint() {
 			return
 		}
 	}
 
-	fmt.Printf("Set a password for private key: ")
-	password := ReadPassword()
-
 	err = os.MkdirAll(dirPath, 0600)
+	if err != nil {
+		fmt.Println("Error:", err)
+		return
+	}
+
+	userCert, key, certInfo, err := cert.CreateCert(infoPath, rcaInfo, cryptoType, keyLength, org, cn, domains, ips, emails, urls, notBefore, notAfter, rcaCert, rcaKey)
+	if err != nil {
+		fmt.Println("Error:", err)
+		return
+	}
+
+	err = certInfo.SaveCertInfo()
 	if err != nil {
 		fmt.Println("Error:", err)
 		return
@@ -575,17 +758,11 @@ func CreateUserCertFromRCA() {
 		return
 	}
 
-	err = rcaSerialNumber.Save()
-	if err != nil {
-		fmt.Println("Error:", err)
-		return
-	}
-
 	fmt.Println("Success, save directory: ", dirPath)
 }
 
 func CreateUserCertFromICA() {
-	icaCert, icaKey, icaFullchain, icaSerialNumber, err := LoadICA()
+	icaCert, icaKey, icaFullchain, icaInfo, err := LoadICA()
 	if err != nil {
 		fmt.Println("Error:", err.Error())
 		return
@@ -661,12 +838,12 @@ func CreateUserCertFromICA() {
 		}
 	}
 
-	fmt.Printf("Now we need to add your email (if you have), do you want to check it from DNS? [yes/no]")
-	checkEmail := ReadYes()
+	fmt.Printf("Now we need to add your email (if you have), do you want to check it from DNS? ")
+	checkEmail := ReadBoolDefaultYesPrint()
 	StillAddEmail := true
 	if checkEmail {
-		fmt.Printf("Now we will check the email when you add it, do you want to still add it when dns check failed? [yes/no]")
-		StillAddEmail = ReadYes()
+		fmt.Printf("Now we will check the email when you add it, do you want to still add it when dns check failed? ")
+		StillAddEmail = ReadBoolDefaultYesPrint()
 	}
 
 	emails := make([]string, 0, 10)
@@ -751,10 +928,10 @@ func CreateUserCertFromICA() {
 		ipsR = append(ipsR, ipsN...)
 	}
 
-	fmt.Printf("Add the domain in cert? [yes/no]")
-	if ReadYes() {
-		fmt.Printf("Add the all of the domain (include which the resolve failed) in cert? [yes/no]")
-		if ReadYes() {
+	fmt.Printf("Add the domain in cert? ")
+	if ReadBoolDefaultYesPrint() {
+		fmt.Printf("Add the all of the domain (include which the resolve failed) in cert? ")
+		if ReadBoolDefaultYesPrint() {
 			domains = append(domains, domainsR...)
 		} else {
 			domains = append(domains, domainsRS...)
@@ -763,13 +940,13 @@ func CreateUserCertFromICA() {
 
 	ips = append(ips, ipsR...)
 
-	userCert, key, err := cert.CreateCert(cryptoType, keyLength, org, cn, domains, ips, emails, urls, notBefore, notAfter, icaSerialNumber, icaCert, icaKey)
-	if err != nil {
-		fmt.Println("Error:", err)
-		return
-	}
+	org, cn = sysinfo.CreateCASubjectLong(org, cn, domains, ips, emails, urls)
 
-	dirPath := path.Join(home, "cert", fmt.Sprintf("%s-%s-%s-%s", userCert.Subject.Organization[0], icaCert.Subject.CommonName, userCert.Subject.CommonName, userCert.NotBefore.Format("2006-01-02-15-04-05")))
+	fmt.Printf("Set a password for private key: ")
+	password := ReadPassword()
+
+	dirPath := path.Join(home, "cert", fmt.Sprintf("%s-%s-%s-%s-%s", icaCert.Subject.Organization[0], icaCert.Subject.CommonName, org, cn, notBefore.Format("2006-01-02-15-04-05")))
+	infoPath := path.Join(dirPath, "cert-info.gob")
 	cert1Path := path.Join(dirPath, "cert.pem")
 	cert2Path := path.Join(dirPath, "cert.cer")
 	fullchain1Path := path.Join(dirPath, "fullchain.pem")
@@ -777,21 +954,30 @@ func CreateUserCertFromICA() {
 	keyPath := path.Join(dirPath, "key.pem")
 
 	if utils.IsExists(cert1Path) || utils.IsExists(cert2Path) || utils.IsExists(fullchain1Path) || utils.IsExists(fullchain2Path) || utils.IsExists(keyPath) {
-		fmt.Printf("There is a duplicate file, it will be overwritten. Do you confirm to save the certificate? [yes/no] ")
-		if !ReadYesMust() {
+		fmt.Printf("There is a duplicate file, it will be overwritten. Do you confirm to save the certificate?")
+		if !ReadBoolDefaultNoPrint() {
 			return
 		}
 	} else {
-		fmt.Printf("Do you confirm to save the certificate? [yes/no] ")
-		if !ReadYes() {
+		fmt.Printf("Do you confirm to save the certificate?")
+		if !ReadBoolDefaultYesPrint() {
 			return
 		}
 	}
 
-	fmt.Printf("Set a password for private key: ")
-	password := ReadPassword()
-
 	err = os.MkdirAll(dirPath, 0600)
+	if err != nil {
+		fmt.Println("Error:", err)
+		return
+	}
+
+	userCert, key, certInfo, err := cert.CreateCert(infoPath, icaInfo, cryptoType, keyLength, org, cn, domains, ips, emails, urls, notBefore, notAfter, icaCert, icaKey)
+	if err != nil {
+		fmt.Println("Error:", err)
+		return
+	}
+
+	err = certInfo.SaveCertInfo()
 	if err != nil {
 		fmt.Println("Error:", err)
 		return
@@ -804,12 +990,6 @@ func CreateUserCertFromICA() {
 	}
 
 	err = utils.SavePrivateKey(key, password, keyPath)
-	if err != nil {
-		fmt.Println("Error:", err)
-		return
-	}
-
-	err = icaSerialNumber.Save()
 	if err != nil {
 		fmt.Println("Error:", err)
 		return
@@ -892,12 +1072,12 @@ func CreateUserCertSelf() {
 		}
 	}
 
-	fmt.Printf("Now we need to add your email (if you have), do you want to check it from DNS? [yes/no]")
-	checkEmail := ReadYes()
+	fmt.Printf("Now we need to add your email (if you have), do you want to check it from DNS? ")
+	checkEmail := ReadBoolDefaultYesPrint()
 	StillAddEmail := true
 	if checkEmail {
-		fmt.Printf("Now we will check the email when you add it, do you want to still add it when dns check failed? [yes/no]")
-		StillAddEmail = ReadYes()
+		fmt.Printf("Now we will check the email when you add it, do you want to still add it when dns check failed? ")
+		StillAddEmail = ReadBoolDefaultYesPrint()
 	}
 
 	emails := make([]string, 0, 10)
@@ -982,10 +1162,10 @@ func CreateUserCertSelf() {
 		ipsR = append(ipsR, ipsN...)
 	}
 
-	fmt.Printf("Add the domain in cert? [yes/no]")
-	if ReadYes() {
-		fmt.Printf("Add the all of the domain (include which the resolve failed) in cert? [yes/no]")
-		if ReadYes() {
+	fmt.Printf("Add the domain in cert? ")
+	if ReadBoolDefaultYesPrint() {
+		fmt.Printf("Add the all of the domain (include which the resolve failed) in cert? ")
+		if ReadBoolDefaultYesPrint() {
 			domains = append(domains, domainsR...)
 		} else {
 			domains = append(domains, domainsRS...)
@@ -994,13 +1174,73 @@ func CreateUserCertSelf() {
 
 	ips = append(ips, ipsR...)
 
-	userCert, key, err := cert.CreateSelfCert(cryptoType, keyLength, org, cn, domains, ips, emails, urls, notBefore, notAfter)
-	if err != nil {
-		fmt.Println("Error:", err)
-		return
+	org, cn = sysinfo.CreateCASubjectLong(org, cn, domains, ips, emails, urls)
+
+	ocspURLs := make([]string, 0, 10)
+	for {
+		fmt.Printf("Enter your OCSP Server URL [empty to stop]: ")
+		res := ReadString()
+		if res == "" {
+			break
+		} else {
+			u, err := url.Parse(res)
+			if err != nil {
+				fmt.Printf("Error: not a valid URL (%s)\n", err.Error())
+				break
+			} else if u.Scheme != "http" && u.Scheme != "https" {
+				fmt.Println("Error: not a valid HTTP/HTTPS URL")
+				break
+			}
+
+			ocspURLs = append(ocspURLs, u.String())
+		}
 	}
 
-	dirPath := path.Join(home, "cert", fmt.Sprintf("Self-%s-%s-%s-%s", userCert.Subject.Organization[0], userCert.Subject.CommonName, userCert.Subject.CommonName, userCert.NotBefore.Format("2006-01-02-15-04-05")))
+	issurURLs := make([]string, 0, 10)
+	for {
+		fmt.Printf("Enter your Issuing Certificate URL [empty to stop]: ")
+		res := ReadString()
+		if res == "" {
+			break
+		} else {
+			u, err := url.Parse(res)
+			if err != nil {
+				fmt.Printf("Error: not a valid URL (%s)\n", err.Error())
+				break
+			} else if u.Scheme != "http" && u.Scheme != "https" {
+				fmt.Println("Error: not a valid HTTP/HTTPS URL")
+				break
+			}
+
+			issurURLs = append(issurURLs, u.String())
+		}
+	}
+
+	crlURLs := make([]string, 0, 10)
+	for {
+		fmt.Printf("Enter your CRL Distribution Points (URL) [empty to stop]: ")
+		res := ReadString()
+		if res == "" {
+			break
+		} else {
+			u, err := url.Parse(res)
+			if err != nil {
+				fmt.Printf("Error: not a valid URL (%s)\n", err.Error())
+				break
+			} else if u.Scheme != "http" && u.Scheme != "https" {
+				fmt.Println("Error: not a valid HTTP/HTTPS URL")
+				break
+			}
+
+			crlURLs = append(crlURLs, u.String())
+		}
+	}
+
+	fmt.Printf("Set a password for private key: ")
+	password := ReadPassword()
+
+	dirPath := path.Join(home, "cert", fmt.Sprintf("Self-%s-%s-%s", cn, org, notBefore.Format("2006-01-02-15-04-05")))
+	infoPath := path.Join(dirPath, "cert-info.gob")
 	cert1Path := path.Join(dirPath, "cert.pem")
 	cert2Path := path.Join(dirPath, "cert.cer")
 	fullchain1Path := path.Join(dirPath, "fullchain.pem")
@@ -1008,21 +1248,30 @@ func CreateUserCertSelf() {
 	keyPath := path.Join(dirPath, "key.pem")
 
 	if utils.IsExists(cert1Path) || utils.IsExists(cert2Path) || utils.IsExists(fullchain1Path) || utils.IsExists(fullchain2Path) || utils.IsExists(keyPath) {
-		fmt.Printf("There is a duplicate file, it will be overwritten. Do you confirm to save the certificate? [yes/no] ")
-		if !ReadYesMust() {
+		fmt.Printf("There is a duplicate file, it will be overwritten. Do you confirm to save the certificate?")
+		if !ReadBoolDefaultNoPrint() {
 			return
 		}
 	} else {
-		fmt.Printf("Do you confirm to save the certificate? [yes/no] ")
-		if !ReadYes() {
+		fmt.Printf("Do you confirm to save the certificate?")
+		if !ReadBoolDefaultYesPrint() {
 			return
 		}
 	}
 
-	fmt.Printf("Set a password for private key: ")
-	password := ReadPassword()
+	err := os.MkdirAll(dirPath, 0600)
+	if err != nil {
+		fmt.Println("Error:", err)
+		return
+	}
 
-	err = os.MkdirAll(dirPath, 0600)
+	userCert, key, certInfo, err := cert.CreateSelfCert(infoPath, cryptoType, keyLength, org, cn, domains, ips, emails, urls, ocspURLs, issurURLs, crlURLs, notBefore, notAfter)
+	if err != nil {
+		fmt.Println("Error:", err)
+		return
+	}
+
+	err = certInfo.SaveSelfCert()
 	if err != nil {
 		fmt.Println("Error:", err)
 		return

@@ -4,13 +4,13 @@ import (
 	"crypto"
 	"crypto/x509"
 	"fmt"
+	"github.com/SongZihuan/MyCA/src/rootca"
 	"github.com/SongZihuan/MyCA/src/utils"
-	"math/big"
 	"os"
 	"path"
 )
 
-func LoadRCA() (cert *x509.Certificate, key crypto.PrivateKey, fullchain []byte, serialNumber *utils.FileTack[*big.Int], err error) {
+func LoadRCA() (cert *x509.Certificate, key crypto.PrivateKey, fullchain []byte, rcaInfo *rootca.RCAInfo, err error) {
 	c := showAllRCA()
 	if len(c) == 0 {
 		return nil, nil, nil, nil, fmt.Errorf("no RCA available")
@@ -31,7 +31,7 @@ func LoadRCA() (cert *x509.Certificate, key crypto.PrivateKey, fullchain []byte,
 	return loadRCA(c[i], passwordFunc)
 }
 
-func loadRCA(name string, passwordFunc func() string) (cert *x509.Certificate, key crypto.PrivateKey, fullchain []byte, serialNumber *utils.FileTack[*big.Int], err error) {
+func loadRCA(name string, passwordFunc func() string) (cert *x509.Certificate, key crypto.PrivateKey, fullchain []byte, rcaInfo *rootca.RCAInfo, err error) {
 	certPEM, err := utils.ReadPemBlock(path.Join(home, "rca", name, "cert.pem"))
 	if err != nil {
 		return nil, nil, nil, nil, err
@@ -69,10 +69,10 @@ func loadRCA(name string, passwordFunc func() string) (cert *x509.Certificate, k
 		}
 	}
 
-	serialNumber, err = utils.ReadBigIntFromFileWithFileStack(path.Join(home, "rca", name, "serial.num"))
+	rcaInfo, err = rootca.GetRCAInfo(path.Join(home, "rca", name, "rca-info.gob"))
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
 
-	return cert, key, fullchain, serialNumber, nil
+	return cert, key, fullchain, rcaInfo, nil
 }

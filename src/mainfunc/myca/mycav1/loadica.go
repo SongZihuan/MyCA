@@ -4,13 +4,13 @@ import (
 	"crypto"
 	"crypto/x509"
 	"fmt"
+	"github.com/SongZihuan/MyCA/src/ica"
 	"github.com/SongZihuan/MyCA/src/utils"
-	"math/big"
 	"os"
 	"path"
 )
 
-func LoadICA() (cert *x509.Certificate, key crypto.PrivateKey, fullchain []byte, serialNumber *utils.FileTack[*big.Int], err error) {
+func LoadICA() (cert *x509.Certificate, key crypto.PrivateKey, fullchain []byte, icaInfo *ica.ICAInfo, err error) {
 	c := showAllICA()
 	if len(c) == 0 {
 		return nil, nil, nil, nil, fmt.Errorf("no ICA available")
@@ -31,7 +31,7 @@ func LoadICA() (cert *x509.Certificate, key crypto.PrivateKey, fullchain []byte,
 	return loadICA(c[i], passwordFunc)
 }
 
-func loadICA(name string, passwordFunc func() string) (cert *x509.Certificate, key crypto.PrivateKey, fullchain []byte, serialNumber *utils.FileTack[*big.Int], err error) {
+func loadICA(name string, passwordFunc func() string) (cert *x509.Certificate, key crypto.PrivateKey, fullchain []byte, icaInfo *ica.ICAInfo, err error) {
 	certPEM, err := utils.ReadPemBlock(path.Join(home, "ica", name, "cert.pem"))
 	if err != nil {
 		return nil, nil, nil, nil, err
@@ -69,10 +69,10 @@ func loadICA(name string, passwordFunc func() string) (cert *x509.Certificate, k
 		}
 	}
 
-	serialNumber, err = utils.ReadBigIntFromFileWithFileStack(path.Join(home, "ica", name, "serial.num"))
+	icaInfo, err = ica.GetICAInfo(path.Join(home, "ica", name, "ica-info.gob"))
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
 
-	return cert, key, fullchain, serialNumber, nil
+	return cert, key, fullchain, icaInfo, nil
 }

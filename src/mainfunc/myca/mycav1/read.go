@@ -93,12 +93,22 @@ func ReadTimeDuration(defaultVal time.Duration) time.Duration {
 	return res
 }
 
-func ReadYes() bool {
-	input := strings.ToLower(ReadString())
-	return input == "" || input == "yes" || input == "y"
+func ReadBoolDefaultYesPrint() bool {
+	fmt.Printf(" [default=yes/no] ")
+	return ReadBoolDefaultYes()
 }
 
-func ReadYesMust() bool {
+func ReadBoolDefaultYes() bool {
 	input := strings.ToLower(ReadString())
-	return input == "yes" || input == "y"
+	return input != "n" && input != "no" && input != "not" && input != "stop"
+}
+
+func ReadBoolDefaultNoPrint() bool {
+	fmt.Printf(" [yes/default=no] ")
+	return ReadBoolDefaultNo()
+}
+
+func ReadBoolDefaultNo() bool {
+	input := strings.ToLower(ReadString())
+	return input == "yes" || input == "y" || input == "ok"
 }
