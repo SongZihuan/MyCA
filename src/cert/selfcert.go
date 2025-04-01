@@ -8,12 +8,12 @@ import (
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
-	"crypto/x509/pkix"
 	"encoding/gob"
 	"fmt"
-	"github.com/SongZihuan/MyCA/src/sysinfo"
+	"github.com/SongZihuan/MyCA/src/global"
 	"github.com/SongZihuan/MyCA/src/utils"
 	"math/big"
 	"net"
@@ -45,7 +45,7 @@ func NewSelfCertInfo(filepath string, ocsp []string, issuerURL []string, crlURL 
 	return info, nil
 }
 
-func GetRCAInfo(filepath string) (*SelfCertInfo, error) {
+func GetSelfCertInfo(filepath string) (*SelfCertInfo, error) {
 	file, err := os.Open(filepath)
 	if err != nil {
 		return nil, err
@@ -84,8 +84,8 @@ func (info *SelfCertInfo) SaveSelfCert() error {
 	return nil
 }
 
-func (info *SelfCertInfo) NewCert() *big.Int {
-	return big.NewInt(1)
+func (info *SelfCertInfo) NewCertSerialNumber() (*big.Int, error) {
+	return rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), uint(40)))
 }
 
 func (info *SelfCertInfo) GetIssuingCertificateURL() []string {
@@ -101,15 +101,24 @@ func (info *SelfCertInfo) GetCRLDistributionPoints() []string {
 }
 
 // CreateSelfCert 创建自签名域名、IP证书
-func CreateSelfCert(infoFilePath string, cryptoType utils.CryptoType, keyLength int, org string, cn string, domains []string, ips []net.IP, emails []string, urls []*url.URL, ocsp []string, selfURL []string, crlURL []string, notBefore time.Time, notAfter time.Time) (*x509.Certificate, crypto.PrivateKey, *SelfCertInfo, error) {
+func CreateSelfCert(infoFilePath string, cryptoType utils.CryptoType, keyLength int, subject *global.CertSubject, keyUsage x509.KeyUsage, extKeyUsage []x509.ExtKeyUsage, domains []string, ips []net.IP, emails []string, urls []*url.URL, ocsp []string, selfURL []string, crlURL []string, notBefore time.Time, notAfter time.Time) (*x509.Certificate, crypto.PrivateKey, *SelfCertInfo, error) {
 	var privKey crypto.PrivateKey
-	var pubKey interface{}
-
-	org, cn = sysinfo.CreateCASubjectLong(org, cn, domains, ips, emails, urls)
+	var pubKey crypto.PublicKey
 
 	info, err := NewSelfCertInfo(infoFilePath, ocsp, selfURL, crlURL)
 	if err != nil {
 		return nil, nil, nil, err
+	}
+
+	err = subject.SetCNIfEmpty() // 兜底，确保CN被设置
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	if extKeyUsage == nil {
+		extKeyUsage = make([]x509.ExtKeyUsage, 0, 0)
+	} else {
+		extKeyUsage = utils.CopySlice(extKeyUsage)
 	}
 
 	switch cryptoType {
@@ -149,10 +158,6 @@ func CreateSelfCert(infoFilePath string, cryptoType utils.CryptoType, keyLength 
 		return nil, nil, nil, fmt.Errorf("unsupported crypto type: %s", cryptoType)
 	}
 
-	if org == "" {
-		org = "MyOrg"
-	}
-
 	if notBefore.Equal(time.Time{}) {
 		notBefore = time.Now()
 	}
@@ -161,23 +166,35 @@ func CreateSelfCert(infoFilePath string, cryptoType utils.CryptoType, keyLength 
 		notAfter = notBefore.Add(time.Hour * 24 * 365 * 5) // 5年
 	}
 
-	template := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject: pkix.Name{
-			Organization: []string{org},
-			CommonName:   cn,
-		},
-		NotBefore: notBefore,
-		NotAfter:  notAfter,
+	ski, err := utils.CalculateSubjectKeyIdentifier(pubKey)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("get subject key indentifier failed: %s", err.Error())
+	}
 
-		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
-		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageAny}, // 允许全部扩展用途
+	serialNumber, err := info.NewCertSerialNumber()
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("get new serial number failed: %s", err.Error())
+	}
+
+	template := &x509.Certificate{
+		SerialNumber: serialNumber,
+		Subject:      subject.ToPkixName(),
+		NotBefore:    notBefore,
+		NotAfter:     notAfter,
+
+		KeyUsage:    keyUsage,
+		ExtKeyUsage: extKeyUsage, // 允许全部扩展用途
+
 		BasicConstraintsValid: true,
 		IsCA:                  false,
-		DNSNames:              domains,
-		IPAddresses:           ips,
-		EmailAddresses:        emails,
-		URIs:                  urls,
+
+		DNSNames:       domains,
+		IPAddresses:    ips,
+		EmailAddresses: emails,
+		URIs:           urls,
+
+		SubjectKeyId:   []byte(ski),
+		AuthorityKeyId: []byte(ski),
 
 		OCSPServer:            info.OCSPServer,
 		IssuingCertificateURL: info.IssuingCertificateURL,

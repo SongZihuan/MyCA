@@ -4,7 +4,6 @@ import (
 	"flag"
 	"fmt"
 	resource "github.com/SongZihuan/MyCA"
-	"os"
 	"os/user"
 	"path"
 )
@@ -37,26 +36,6 @@ func InitFlagParser() error {
 	if version {
 		fmt.Println("Version: ", resource.Version)
 		return StopRun
-	}
-
-	err = os.MkdirAll(Home, 0600)
-	if err != nil {
-		return err
-	}
-
-	err = os.MkdirAll(path.Join(Home, "rca"), 0600)
-	if err != nil {
-		return err
-	}
-
-	err = os.MkdirAll(path.Join(Home, "ica"), 0600)
-	if err != nil {
-		return err
-	}
-
-	err = os.MkdirAll(path.Join(Home, "cert"), 0600)
-	if err != nil {
-		return err
 	}
 
 	return nil

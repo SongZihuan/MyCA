@@ -7,6 +7,7 @@ import (
 	"github.com/SongZihuan/MyCA/src/flagparser"
 	"os"
 	"os/signal"
+	"path"
 	"syscall"
 	"time"
 )
@@ -18,12 +19,40 @@ func MainV1() (exitcode int) {
 			return 0
 		}
 
-		fmt.Println("Error:", err)
+		fmt.Printf("Error: %s\n", err.Error())
 		return 1
 	}
 
 	home = flagparser.Home
+	homeRCA = path.Join(home, "rca")
+	homeICA = path.Join(home, "ica")
+	homeCert = path.Join(home, "cert")
+
 	stdinReader = bufio.NewReader(os.Stdin)
+
+	err = os.MkdirAll(home, 0600)
+	if err != nil {
+		fmt.Printf("Error: %s\n", err.Error())
+		return 1
+	}
+
+	err = os.MkdirAll(path.Join(home, "rca"), 0600)
+	if err != nil {
+		fmt.Printf("Error: %s\n", err.Error())
+		return 1
+	}
+
+	err = os.MkdirAll(path.Join(home, "ica"), 0600)
+	if err != nil {
+		fmt.Printf("Error: %s\n", err.Error())
+		return 1
+	}
+
+	err = os.MkdirAll(path.Join(home, "cert"), 0600)
+	if err != nil {
+		fmt.Printf("Error: %s\n", err.Error())
+		return 1
+	}
 
 	stopChan := make(chan int, 2)
 	sigChan := make(chan os.Signal, 10)

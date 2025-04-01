@@ -11,23 +11,15 @@ import (
 	"net/url"
 )
 
-func CreateCASubject(org string, cn string) (string, string) {
-	if org == "" {
-		org = Hostname
-	}
-
+func CreateCASubject(cn string) string {
 	if cn == "" {
 		cn = fmt.Sprintf("%s%02d", Username, utils.RandIntn(98)+1) // 数字范围1-99
 	}
 
-	return org, cn
+	return cn
 }
 
-func CreateCASubjectLong(org string, cn string, domains []string, ips []net.IP, emails []string, urls []*url.URL) (string, string) {
-	if org == "" {
-		org = Hostname
-	}
-
+func CreateCASubjectLong(cn string, domains []string, ips []net.IP, emails []string, urls []*url.URL) string {
 	if cn == "" {
 		if len(domains) != 0 {
 			cn = domains[0]
@@ -42,5 +34,5 @@ func CreateCASubjectLong(org string, cn string, domains []string, ips []net.IP, 
 		}
 	}
 
-	return org, cn
+	return cn
 }

@@ -4,12 +4,12 @@ import (
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
-	"crypto/x509/pkix"
 	"encoding/gob"
 	"fmt"
-	"github.com/SongZihuan/MyCA/src/sysinfo"
+	"github.com/SongZihuan/MyCA/src/global"
 	"github.com/SongZihuan/MyCA/src/utils"
 	"math/big"
 	"os"
@@ -30,8 +30,14 @@ func init() {
 }
 
 func NewRCAInfo(filepath string, ocsp []string, issuerURL []string, crlURL []string) (*RCAInfo, error) {
+	randMax := new(big.Int).Lsh(big.NewInt(1), uint(40))
+	randSerialNumber, err := rand.Int(rand.Reader, randMax)
+	if err != nil {
+		return nil, fmt.Errorf("error generating random number: %s", err.Error())
+	}
+
 	info := &RCAInfo{
-		SerialNumber:          big.NewInt(0),
+		SerialNumber:          randSerialNumber,
 		OCSPServer:            ocsp,
 		IssuingCertificateURL: issuerURL,
 		CRLDistributionPoints: crlURL,
@@ -80,8 +86,14 @@ func (info *RCAInfo) SaveRCAInfo() error {
 	return nil
 }
 
-func (info *RCAInfo) NewCert() *big.Int {
-	return info.SerialNumber.Add(info.SerialNumber, big.NewInt(1))
+func (info *RCAInfo) NewCertSerialNumber() (*big.Int, error) {
+	randMax := new(big.Int).Lsh(big.NewInt(1), uint(40))
+	addSerialNumber, err := rand.Int(rand.Reader, randMax)
+	if err != nil {
+		return nil, fmt.Errorf("error generating random number: %s", err.Error())
+	}
+
+	return info.SerialNumber.Add(info.SerialNumber, addSerialNumber), nil
 }
 
 func (info *RCAInfo) GetIssuingCertificateURL() []string {
@@ -97,13 +109,24 @@ func (info *RCAInfo) GetCRLDistributionPoints() []string {
 }
 
 // CreateRCA 创建根CA证书
-func CreateRCA(infoFilePath string, cryptoType utils.CryptoType, keyLength int, org string, cn string, ocsp []string, selfURL []string, crlURL []string, notBefore time.Time, notAfter time.Time) (*x509.Certificate, crypto.PrivateKey, *RCAInfo, error) {
+func CreateRCA(infoFilePath string, cryptoType utils.CryptoType, keyLength int, subject *global.CertSubject, keyUsage x509.KeyUsage, extKeyUsage []x509.ExtKeyUsage, maxPathLen int, ocsp []string, selfURL []string, crlURL []string, notBefore time.Time, notAfter time.Time) (*x509.Certificate, crypto.PrivateKey, *RCAInfo, error) {
 	var privKey crypto.PrivateKey
-	var pubKey interface{}
+	var pubKey crypto.PublicKey
 
 	info, err := NewRCAInfo(infoFilePath, ocsp, selfURL, crlURL)
 	if err != nil {
 		return nil, nil, nil, err
+	}
+
+	err = subject.SetCNIfEmpty() // 兜底，确保CN被设置
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	if extKeyUsage == nil {
+		extKeyUsage = make([]x509.ExtKeyUsage, 0, 0)
+	} else {
+		extKeyUsage = utils.CopySlice(extKeyUsage)
 	}
 
 	switch cryptoType {
@@ -143,8 +166,6 @@ func CreateRCA(infoFilePath string, cryptoType utils.CryptoType, keyLength int, 
 		return nil, nil, nil, fmt.Errorf("unsupported crypto type: %s", cryptoType)
 	}
 
-	org, cn = sysinfo.CreateCASubject(org, cn)
-
 	if notBefore.Equal(time.Time{}) {
 		notBefore = time.Now()
 	}
@@ -153,21 +174,32 @@ func CreateRCA(infoFilePath string, cryptoType utils.CryptoType, keyLength int, 
 		notAfter = notBefore.Add(time.Hour * 24 * 365 * 10) // 10年
 	}
 
-	template := &x509.Certificate{
-		SerialNumber: info.NewCert(),
-		Subject: pkix.Name{
-			Organization: []string{org},
-			CommonName:   cn,
-		},
-		NotBefore: notBefore,
-		NotAfter:  notAfter,
+	ski, err := utils.CalculateSubjectKeyIdentifier(pubKey)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("get subject key indentifier failed: %s", err.Error())
+	}
 
-		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment | x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
-		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageAny}, // 允许全部扩展用途
+	serialNumber, err := info.NewCertSerialNumber()
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("get new serial number failed: %s", err.Error())
+	}
+
+	template := &x509.Certificate{
+		SerialNumber: serialNumber,
+		Subject:      subject.ToPkixName(),
+		NotBefore:    notBefore,
+		NotAfter:     notAfter,
+
+		KeyUsage:    keyUsage,
+		ExtKeyUsage: extKeyUsage, // 允许全部扩展用途
+
 		BasicConstraintsValid: true,
 		IsCA:                  true,
-		MaxPathLen:            -1,
-		MaxPathLenZero:        false,
+		MaxPathLen:            maxPathLen,
+		MaxPathLenZero:        true,
+
+		SubjectKeyId:   []byte(ski),
+		AuthorityKeyId: []byte(ski),
 
 		OCSPServer:            info.OCSPServer,
 		IssuingCertificateURL: info.IssuingCertificateURL,

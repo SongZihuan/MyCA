@@ -4,12 +4,12 @@ import (
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
-	"crypto/x509/pkix"
 	"encoding/gob"
 	"fmt"
-	"github.com/SongZihuan/MyCA/src/sysinfo"
+	"github.com/SongZihuan/MyCA/src/global"
 	"github.com/SongZihuan/MyCA/src/utils"
 	"math/big"
 	"os"
@@ -34,8 +34,14 @@ func init() {
 }
 
 func NewICAInfo(filepath string, ca UpstreamCAInfo, ocsp []string, issuerURL []string, crlURL []string) (*ICAInfo, error) {
+	randMax := new(big.Int).Lsh(big.NewInt(1), uint(40))
+	randSerialNumber, err := rand.Int(rand.Reader, randMax)
+	if err != nil {
+		return nil, fmt.Errorf("error generating random number: %s", err.Error())
+	}
+
 	info := &ICAInfo{
-		SerialNumber:          big.NewInt(0),
+		SerialNumber:          randSerialNumber,
 		OCSPServer:            ocsp,
 		IssuingCertificateURL: issuerURL,
 		CRLDistributionPoints: crlURL,
@@ -85,8 +91,14 @@ func (info *ICAInfo) SaveICAInfo() error {
 	return nil
 }
 
-func (info *ICAInfo) NewCert() *big.Int {
-	return info.SerialNumber.Add(info.SerialNumber, big.NewInt(1))
+func (info *ICAInfo) NewCertSerialNumber() (*big.Int, error) {
+	randMax := new(big.Int).Lsh(big.NewInt(1), uint(40))
+	addSerialNumber, err := rand.Int(rand.Reader, randMax)
+	if err != nil {
+		return nil, fmt.Errorf("error generating random number: %s", err.Error())
+	}
+
+	return info.SerialNumber.Add(info.SerialNumber, addSerialNumber), nil
 }
 
 func (info *ICAInfo) GetIssuingCertificateURL() []string {
@@ -102,13 +114,24 @@ func (info *ICAInfo) GetCRLDistributionPoints() []string {
 }
 
 // CreateICA 创建中间CA证书
-func CreateICA(infoFilePath string, caInfo UpstreamCAInfo, cryptoType utils.CryptoType, keyLength int, org string, cn string, selfOSCP []string, selfURL []string, crlURL []string, notBefore time.Time, notAfter time.Time, rootCert *x509.Certificate, rootKey crypto.PrivateKey) (*x509.Certificate, crypto.PrivateKey, *ICAInfo, error) {
+func CreateICA(infoFilePath string, caInfo UpstreamCAInfo, cryptoType utils.CryptoType, keyLength int, subject *global.CertSubject, keyUsage x509.KeyUsage, extKeyUsage []x509.ExtKeyUsage, maxPathLen int, selfOSCP []string, selfURL []string, crlURL []string, notBefore time.Time, notAfter time.Time, ca *x509.Certificate, caKey crypto.PrivateKey) (*x509.Certificate, crypto.PrivateKey, *ICAInfo, error) {
 	var privKey crypto.PrivateKey
-	var pubKey interface{}
+	var pubKey crypto.PublicKey
 
 	info, err := NewICAInfo(infoFilePath, caInfo, selfOSCP, selfURL, crlURL)
 	if err != nil {
 		return nil, nil, nil, err
+	}
+
+	err = subject.SetCNIfEmpty() // 兜底，确保CN被设置
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	if extKeyUsage == nil {
+		extKeyUsage = make([]x509.ExtKeyUsage, 0, 0)
+	} else {
+		extKeyUsage = utils.CopySlice(extKeyUsage)
 	}
 
 	switch cryptoType {
@@ -148,8 +171,6 @@ func CreateICA(infoFilePath string, caInfo UpstreamCAInfo, cryptoType utils.Cryp
 		return nil, nil, nil, fmt.Errorf("unsupported crypto type: %s", cryptoType)
 	}
 
-	org, cn = sysinfo.CreateCASubject(org, cn)
-
 	if notBefore.Equal(time.Time{}) {
 		notBefore = time.Now()
 	}
@@ -158,21 +179,32 @@ func CreateICA(infoFilePath string, caInfo UpstreamCAInfo, cryptoType utils.Cryp
 		notAfter = notBefore.Add(time.Hour * 24 * 365 * 5) // 5年
 	}
 
-	template := &x509.Certificate{
-		SerialNumber: info.NewCert(),
-		Subject: pkix.Name{
-			Organization: []string{org},
-			CommonName:   cn,
-		},
-		NotBefore: notBefore,
-		NotAfter:  notAfter,
+	ski, err := utils.CalculateSubjectKeyIdentifier(pubKey)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("get subject key indentifier failed: %s", err.Error())
+	}
 
-		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment | x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
-		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageAny}, // 允许全部扩展用途
+	serialNumber, err := info.NewCertSerialNumber()
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("get new serial number failed: %s", err.Error())
+	}
+
+	template := &x509.Certificate{
+		SerialNumber: serialNumber,
+		Subject:      subject.ToPkixName(),
+		NotBefore:    notBefore,
+		NotAfter:     notAfter,
+
+		KeyUsage:    keyUsage,
+		ExtKeyUsage: extKeyUsage, // 允许全部扩展用途
+
 		BasicConstraintsValid: true,
 		IsCA:                  true,
-		MaxPathLen:            -1,
-		MaxPathLenZero:        false,
+		MaxPathLen:            maxPathLen,
+		MaxPathLenZero:        true,
+
+		SubjectKeyId:   []byte(ski),
+		AuthorityKeyId: ca.SubjectKeyId,
 
 		// 此处CA证书和终端证书不同，CA显示自己的吊销列表，终端证书显示对于CA的吊销列表
 		OCSPServer:            info.OCSPServer,
@@ -180,7 +212,7 @@ func CreateICA(infoFilePath string, caInfo UpstreamCAInfo, cryptoType utils.Cryp
 		CRLDistributionPoints: info.CRLDistributionPoints,
 	}
 
-	derBytes, err := x509.CreateCertificate(utils.Rander(), template, rootCert, pubKey, rootKey)
+	derBytes, err := x509.CreateCertificate(utils.Rander(), template, ca, pubKey, caKey)
 	if err != nil {
 		return nil, nil, nil, err
 	}

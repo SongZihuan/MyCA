@@ -5,7 +5,6 @@ import (
 	"github.com/SongZihuan/MyCA/src/cert"
 	"github.com/SongZihuan/MyCA/src/ica"
 	"github.com/SongZihuan/MyCA/src/rootca"
-	"github.com/SongZihuan/MyCA/src/sysinfo"
 	"github.com/SongZihuan/MyCA/src/utils"
 	"net"
 	"net/mail"
@@ -55,17 +54,40 @@ func CreateRCA() {
 
 	fmt.Println("Crypto: ", cryptoType, keyLength)
 
-	fmt.Printf("Org: ")
-	org := ReadString()
-
-	fmt.Printf("Common Name: ")
-	cn := ReadString()
+	subject, err := ReadSubject()
+	if err != nil {
+		fmt.Printf("Error: %s\n", err.Error())
+		return
+	}
 
 	fmt.Printf("Validity: ")
 	validity := ReadTimeDuration(time.Hour * 24 * 365 * 10)
 
 	notBefore := time.Now()
 	notAfter := notBefore.Add(validity)
+
+	keyUseage, err := ReadKeyUsage("rca")
+	if err != nil {
+		fmt.Printf("Error: %s\n", err.Error())
+		return
+	}
+
+	extKeyUseage, err := ReadExtKeyUsage()
+	if err != nil {
+		fmt.Printf("Error: %s\n", err.Error())
+		return
+	}
+
+	fmt.Printf("Set the ca max path len limit [-1 means no limit]: ")
+	maxPathLen := ReadNumber()
+	if maxPathLen < -1 {
+		maxPathLen = -1
+		fmt.Printf("OK, the CA has not limit to create ica.\n")
+	} else if maxPathLen == 0 {
+		fmt.Printf("OK, the CA can not to create ica.\n")
+	} else {
+		fmt.Printf("OK, CA can create %d layers of ica.\n", maxPathLen)
+	}
 
 	ocspURLs := make([]string, 0, 10)
 	for {
@@ -130,15 +152,26 @@ func CreateRCA() {
 	fmt.Printf("Set a password for private key [empty is no password]: ")
 	password := ReadPassword()
 
-	org, cn = sysinfo.CreateCASubject(org, cn)
+	err = subject.SetCNIfEmpty()
+	if err != nil {
+		fmt.Printf("Error: %s\n", err)
+		return
+	}
 
-	dirPath := path.Join(home, "rca", fmt.Sprintf("%s-%s", org, cn))
-	infoFile := path.Join(dirPath, "rca-info.gob")
+	_, dirPath, err := ReadDir(homeRCA, "RCA-", subject)
+	if err != nil {
+		fmt.Printf("Error: %s", err.Error())
+		return
+	}
+
+	infoPath := path.Join(dirPath, "rca-info.gob")
 	cert1Path := path.Join(dirPath, "cert.pem")
 	cert2Path := path.Join(dirPath, "cert.cer")
 	fullchain1Path := path.Join(dirPath, "fullchain.pem")
 	fullchain2Path := path.Join(dirPath, "fullchain.cer")
 	keyPath := path.Join(dirPath, "key.pem")
+	spxPath := path.Join(dirPath, "cert.spx")
+	pfxPath := path.Join(dirPath, "cert.pfx")
 
 	if utils.IsExists(dirPath) {
 		fmt.Printf("There is a duplicate file, it will be overwritten. Do you confirm to save the certificate?")
@@ -152,33 +185,45 @@ func CreateRCA() {
 		}
 	}
 
-	err := os.MkdirAll(dirPath, 0600)
+	err = os.MkdirAll(dirPath, 0600)
 	if err != nil {
-		fmt.Println("Error:", err)
+		fmt.Printf("Error: %s\n", err.Error())
 		return
 	}
 
-	caCert, key, rcaInfo, err := rootca.CreateRCA(infoFile, cryptoType, keyLength, org, cn, ocspURLs, issurURLs, crlURLs, notBefore, notAfter)
+	caCert, key, rcaInfo, err := rootca.CreateRCA(infoPath, cryptoType, keyLength, subject, keyUseage, extKeyUseage, maxPathLen, ocspURLs, issurURLs, crlURLs, notBefore, notAfter)
 	if err != nil {
-		fmt.Println("Error:", err)
+		fmt.Printf("Error: %s\n", err.Error())
 		return
 	}
 
 	err = rcaInfo.SaveRCAInfo()
 	if err != nil {
-		fmt.Println("Error:", err)
+		fmt.Printf("Error: %s\n", err.Error())
 		return
 	}
 
 	err = utils.SaveCertificate(caCert, []byte{}, cert1Path, cert2Path, fullchain1Path, fullchain2Path)
 	if err != nil {
-		fmt.Println("Error:", err)
+		fmt.Printf("Error: %s\n", err.Error())
 		return
 	}
 
 	err = utils.SavePrivateKey(key, password, keyPath)
 	if err != nil {
-		fmt.Println("Error:", err)
+		fmt.Printf("Error: %s\n", err.Error())
+		return
+	}
+
+	err = utils.SaveSPX(key, password, caCert, []byte{}, spxPath)
+	if err != nil {
+		fmt.Printf("Error: %s\n", err.Error())
+		return
+	}
+
+	err = utils.SavePFX(key, password, caCert, []byte{}, pfxPath)
+	if err != nil {
+		fmt.Printf("Error: %s\n", err.Error())
 		return
 	}
 
@@ -223,19 +268,53 @@ func CreateICAFromRCA() {
 
 	fmt.Println("Crypto: ", cryptoType, keyLength)
 
-	fmt.Printf("Org: ")
-	org := ReadString()
-
-	fmt.Printf("Common Name: ")
-	cn := ReadString()
-
-	org, cn = sysinfo.CreateCASubject(org, cn)
+	subject, err := ReadSubject()
+	if err != nil {
+		fmt.Printf("Error: %s\n", err.Error())
+		return
+	}
 
 	fmt.Printf("Validity: ")
 	validity := ReadTimeDuration(time.Hour * 24 * 365 * 5)
 
 	notBefore := time.Now()
 	notAfter := notBefore.Add(validity)
+
+	keyUseage, err := ReadKeyUsage("ica")
+	if err != nil {
+		fmt.Printf("Error: %s\n", err.Error())
+		return
+	}
+
+	extKeyUseage, err := ReadExtKeyUsage()
+	if err != nil {
+		fmt.Printf("Error: %s\n", err.Error())
+		return
+	}
+
+	fmt.Printf("Set the ca max path len limit [-1 means no limit]: ")
+	maxPathLen := ReadNumber()
+	if maxPathLen < -1 {
+		if rcaCert.MaxPathLen != -1 {
+			fmt.Printf("Error: bad max path len: path len must less than father ca")
+			return
+		}
+
+		maxPathLen = -1
+		fmt.Printf("OK, the CA has not limit to create ica.\n")
+	} else if maxPathLen == 0 {
+		if rcaCert.MaxPathLen == 0 {
+			fmt.Printf("Error: bad max path len: path len must less than father ca")
+			return
+		}
+		fmt.Printf("OK, the CA can not to create ica.\n")
+	} else {
+		if rcaCert.MaxPathLen != -1 && rcaCert.MaxPathLen < maxPathLen {
+			fmt.Printf("Error: bad max path len: path len must less than father ca")
+			return
+		}
+		fmt.Printf("OK, CA can create %d layers of ica.\n", maxPathLen)
+	}
 
 	selfOcspURLs := make([]string, 0, 10)
 	for {
@@ -300,13 +379,26 @@ func CreateICAFromRCA() {
 	fmt.Printf("Set a password for private key: ")
 	password := ReadPassword()
 
-	dirPath := path.Join(home, "ica", fmt.Sprintf("%s-%s", org, cn))
-	infoFile := path.Join(dirPath, "rca-info.gob")
+	err = subject.SetCNIfEmpty()
+	if err != nil {
+		fmt.Printf("Error: %s\n", err)
+		return
+	}
+
+	_, dirPath, err := ReadDir(homeICA, "ICA-", subject)
+	if err != nil {
+		fmt.Printf("Error: %s", err.Error())
+		return
+	}
+
+	infoPath := path.Join(dirPath, "ica-info.gob")
 	cert1Path := path.Join(dirPath, "cert.pem")
 	cert2Path := path.Join(dirPath, "cert.cer")
 	fullchain1Path := path.Join(dirPath, "fullchain.pem")
 	fullchain2Path := path.Join(dirPath, "fullchain.cer")
 	keyPath := path.Join(dirPath, "key.pem")
+	spxPath := path.Join(dirPath, "cert.spx")
+	pfxPath := path.Join(dirPath, "cert.pfx")
 
 	if utils.IsExists(dirPath) {
 		fmt.Printf("There is a duplicate file, it will be overwritten. Do you confirm to save the certificate?")
@@ -322,31 +414,43 @@ func CreateICAFromRCA() {
 
 	err = os.MkdirAll(dirPath, 0600)
 	if err != nil {
-		fmt.Println("Error:", err)
+		fmt.Printf("Error: %s\n", err.Error())
 		return
 	}
 
-	caCert, key, icaInfo, err := ica.CreateICA(infoFile, rcaInfo, cryptoType, keyLength, org, cn, selfOcspURLs, selfIssurURLs, crlURLs, notBefore, notAfter, rcaCert, rcaKey)
+	caCert, key, icaInfo, err := ica.CreateICA(infoPath, rcaInfo, cryptoType, keyLength, subject, keyUseage, extKeyUseage, maxPathLen, selfOcspURLs, selfIssurURLs, crlURLs, notBefore, notAfter, rcaCert, rcaKey)
 	if err != nil {
-		fmt.Println("Error:", err)
+		fmt.Printf("Error: %s\n", err.Error())
 		return
 	}
 
 	err = icaInfo.SaveICAInfo()
 	if err != nil {
-		fmt.Println("Error:", err)
+		fmt.Printf("Error: %s\n", err.Error())
 		return
 	}
 
 	err = utils.SaveCertificate(caCert, rcaFullchain, cert1Path, cert2Path, fullchain1Path, fullchain2Path)
 	if err != nil {
-		fmt.Println("Error:", err)
+		fmt.Printf("Error: %s\n", err.Error())
 		return
 	}
 
 	err = utils.SavePrivateKey(key, password, keyPath)
 	if err != nil {
-		fmt.Println("Error:", err)
+		fmt.Printf("Error: %s\n", err.Error())
+		return
+	}
+
+	err = utils.SaveSPX(key, password, caCert, rcaFullchain, spxPath)
+	if err != nil {
+		fmt.Printf("Error: %s\n", err.Error())
+		return
+	}
+
+	err = utils.SavePFX(key, password, caCert, rcaFullchain, pfxPath)
+	if err != nil {
+		fmt.Printf("Error: %s\n", err.Error())
 		return
 	}
 
@@ -391,16 +495,53 @@ func CreateICAFromICA() {
 
 	fmt.Println("Crypto: ", cryptoType, keyLength)
 
-	fmt.Printf("Org: ")
-	org := ReadString()
-
-	fmt.Printf("Common Name: ")
-	cn := ReadString()
-
-	org, cn = sysinfo.CreateCASubject(org, cn)
+	subject, err := ReadSubject()
+	if err != nil {
+		fmt.Printf("Error: %s\n", err.Error())
+		return
+	}
 
 	fmt.Printf("Validity: ")
 	validity := ReadTimeDuration(time.Hour * 24 * 365 * 5)
+
+	notBefore := time.Now()
+	notAfter := notBefore.Add(validity)
+
+	keyUseage, err := ReadKeyUsage("ica")
+	if err != nil {
+		fmt.Printf("Error: %s\n", err.Error())
+		return
+	}
+
+	extKeyUseage, err := ReadExtKeyUsage()
+	if err != nil {
+		fmt.Printf("Error: %s\n", err.Error())
+		return
+	}
+
+	fmt.Printf("Set the ca max path len limit [-1 means no limit]: ")
+	maxPathLen := ReadNumber()
+	if maxPathLen < -1 {
+		if icaCert.MaxPathLen != -1 {
+			fmt.Printf("Error: bad max path len: path len must less than father ca")
+			return
+		}
+
+		maxPathLen = -1
+		fmt.Printf("OK, the CA has not limit to create ica.\n")
+	} else if maxPathLen == 0 {
+		if icaCert.MaxPathLen == 0 {
+			fmt.Printf("Error: bad max path len: path len must less than father ca")
+			return
+		}
+		fmt.Printf("OK, the CA can not to create ica.\n")
+	} else {
+		if icaCert.MaxPathLen != -1 && icaCert.MaxPathLen < maxPathLen {
+			fmt.Printf("Error: bad max path len: path len must less than father ca")
+			return
+		}
+		fmt.Printf("OK, CA can create %d layers of ica.\n", maxPathLen)
+	}
 
 	ocspURLs := make([]string, 0, 10)
 	for {
@@ -465,16 +606,26 @@ func CreateICAFromICA() {
 	fmt.Printf("Set a password for private key: ")
 	password := ReadPassword()
 
-	notBefore := time.Now()
-	notAfter := notBefore.Add(validity)
+	err = subject.SetCNIfEmpty()
+	if err != nil {
+		fmt.Printf("Error: %s\n", err)
+		return
+	}
 
-	dirPath := path.Join(home, "ica", fmt.Sprintf("%s-%s", org, cn))
-	infoFile := path.Join(dirPath, "ica-info.gob")
+	_, dirPath, err := ReadDir(homeICA, "ICA-", subject)
+	if err != nil {
+		fmt.Printf("Error: %s", err.Error())
+		return
+	}
+
+	infoPath := path.Join(dirPath, "ica-info.gob")
 	cert1Path := path.Join(dirPath, "cert.pem")
 	cert2Path := path.Join(dirPath, "cert.cer")
 	fullchain1Path := path.Join(dirPath, "fullchain.pem")
 	fullchain2Path := path.Join(dirPath, "fullchain.cer")
 	keyPath := path.Join(dirPath, "key.pem")
+	spxPath := path.Join(dirPath, "cert.spx")
+	pfxPath := path.Join(dirPath, "cert.pfx")
 
 	if utils.IsExists(cert1Path) || utils.IsExists(cert2Path) || utils.IsExists(fullchain1Path) || utils.IsExists(fullchain2Path) || utils.IsExists(keyPath) {
 		fmt.Printf("There is a duplicate file, it will be overwritten. Do you confirm to save the certificate?")
@@ -490,31 +641,43 @@ func CreateICAFromICA() {
 
 	err = os.MkdirAll(dirPath, 0600)
 	if err != nil {
-		fmt.Println("Error:", err)
+		fmt.Printf("Error: %s\n", err.Error())
 		return
 	}
 
-	caCert, key, newIcaInfo, err := ica.CreateICA(infoFile, icaInfo, cryptoType, keyLength, org, cn, ocspURLs, issurURLs, crlURLs, notBefore, notAfter, icaCert, icaKey)
+	caCert, key, newIcaInfo, err := ica.CreateICA(infoPath, icaInfo, cryptoType, keyLength, subject, keyUseage, extKeyUseage, maxPathLen, ocspURLs, issurURLs, crlURLs, notBefore, notAfter, icaCert, icaKey)
 	if err != nil {
-		fmt.Println("Error:", err)
+		fmt.Printf("Error: %s\n", err.Error())
 		return
 	}
 
 	err = newIcaInfo.SaveICAInfo()
 	if err != nil {
-		fmt.Println("Error:", err)
+		fmt.Printf("Error: %s\n", err.Error())
 		return
 	}
 
 	err = utils.SaveCertificate(caCert, icaFullchain, cert1Path, cert2Path, fullchain1Path, fullchain2Path)
 	if err != nil {
-		fmt.Println("Error:", err)
+		fmt.Printf("Error: %s\n", err.Error())
 		return
 	}
 
 	err = utils.SavePrivateKey(key, password, keyPath)
 	if err != nil {
-		fmt.Println("Error:", err)
+		fmt.Printf("Error: %s\n", err.Error())
+		return
+	}
+
+	err = utils.SaveSPX(key, password, caCert, icaFullchain, spxPath)
+	if err != nil {
+		fmt.Printf("Error: %s\n", err.Error())
+		return
+	}
+
+	err = utils.SavePFX(key, password, caCert, icaFullchain, pfxPath)
+	if err != nil {
+		fmt.Printf("Error: %s\n", err.Error())
 		return
 	}
 
@@ -559,11 +722,11 @@ func CreateUserCertFromRCA() {
 
 	fmt.Println("Crypto: ", cryptoType, keyLength)
 
-	fmt.Printf("Org: ")
-	org := ReadString()
-
-	fmt.Printf("Common Name: ")
-	cn := ReadString()
+	subject, err := ReadSubject()
+	if err != nil {
+		fmt.Printf("Error: %s\n", err.Error())
+		return
+	}
 
 	fmt.Printf("Validity: ")
 	validity := ReadTimeDuration(time.Hour * 24 * 365 * 5)
@@ -571,34 +734,39 @@ func CreateUserCertFromRCA() {
 	notBefore := time.Now()
 	notAfter := notBefore.Add(validity)
 
-	domains := make([]string, 0, 10)
-	for {
-		fmt.Printf("Enter your domain [empty to stop]: ")
-		res := ReadString()
-		if res == "" {
-			break
-		} else if !utils.IsValidDomain(res) {
-			fmt.Println("Error: not a valid domain")
-			break
-		}
-		domains = append(domains, res)
+	keyUseage, err := ReadKeyUsage("cert")
+	if err != nil {
+		fmt.Printf("Error: %s\n", err.Error())
+		return
 	}
 
-	ips := make([]net.IP, 0, 10)
-	for {
-		fmt.Printf("Enter your ip [empty to stop]: ")
-		res := ReadString()
-		if res == "" {
-			break
-		} else {
-			ip := net.ParseIP(res)
-			if ip == nil {
-				fmt.Println("Error: not a valid ip")
-				break
-			}
+	extKeyUseage, err := ReadExtKeyUsage()
+	if err != nil {
+		fmt.Printf("Error: %s\n", err.Error())
+		return
+	}
 
-			ips = append(ips, ip)
+	domains, err := ReadMoreStringWithPolicy("Enter your domain", func(s string) (string, error) {
+		if !utils.IsValidDomain(s) {
+			return "", NewWarning("not a valid domain")
 		}
+		return s, nil
+	})
+	if err != nil {
+		fmt.Printf("Error: %s\n", err.Error())
+		return
+	}
+
+	ips, err := ReadMoreStringWithPolicy("Enter your IPv4/IPv6", func(s string) (net.IP, error) {
+		ip := net.ParseIP(s)
+		if ip == nil {
+			return nil, NewWarning("not a valid ip")
+		}
+		return ip, nil
+	})
+	if err != nil {
+		fmt.Printf("Error: %s\n", err.Error())
+		return
 	}
 
 	fmt.Printf("Now we need to add your email (if you have), do you want to check it from DNS? ")
@@ -609,86 +777,71 @@ func CreateUserCertFromRCA() {
 		StillAddEmail = ReadBoolDefaultYesPrint()
 	}
 
-	emails := make([]string, 0, 10)
-	for {
-		fmt.Printf("Enter your email [empty to stop]: ")
-		res := ReadString()
-		if res == "" {
-			break
-		} else {
-			email, err := mail.ParseAddress(res)
-			if err != nil {
-				fmt.Printf("Error: not a valid email (%s)\n", err.Error())
-				break
-			} else if !utils.IsValidEmail(email.Address) {
-				fmt.Println("Error: not a valid email")
-				break
-			} else if checkEmail {
-				if utils.CheckEmailMX(email) {
-					fmt.Printf("OK: email (%s) check success\n", res)
-				} else {
-					if StillAddEmail {
-						fmt.Printf("Warn: email (%s) check failed\n", res)
-					} else {
-						fmt.Printf("Error: email (%s) check failed\n", res)
-						break
-					}
+	emails, err := ReadMoreStringWithPolicy("Enter your email", func(s string) (string, error) {
+		email, err := mail.ParseAddress(s)
+		if err != nil {
+			return "", NewWarning(fmt.Sprintf("not a valid email (%s)", err.Error()))
+		} else if !utils.IsValidEmail(email.Address) {
+			return "", NewWarning("not a valid email (%s)")
+		} else if checkEmail {
+			if !utils.CheckEmailMX(email) {
+				if !StillAddEmail {
+					return "", NewWarning(fmt.Sprintf("email (%s) check failed\n", s))
 				}
 			}
-
-			emails = append(emails, email.Address)
 		}
+		return email.Address, nil
+	})
+	if err != nil {
+		fmt.Printf("Error: %s\n", err.Error())
+		return
 	}
 
-	urls := make([]*url.URL, 0, 10)
-	for {
-		fmt.Printf("Enter your URL [empty to stop]: ")
-		res := ReadString()
-		if res == "" {
-			break
-		} else {
-			u, err := url.Parse(res)
-			if err != nil {
-				fmt.Printf("Error: not a valid URL (%s)\n", err.Error())
-				break
-			}
-
-			urls = append(urls, u)
+	urls, err := ReadMoreStringWithPolicy("Enter your URL", func(s string) (*url.URL, error) {
+		u, err := url.Parse(s)
+		if err != nil {
+			return nil, NewWarning("not a valid url")
 		}
+
+		return u, nil
+	})
+	if err != nil {
+		fmt.Printf("Error: %s\n", err.Error())
+		return
 	}
 
 	domainsR := make([]string, 0, 10)
 	domainsRS := make([]string, 0, 10)
 	ipsR := make([]net.IP, 0, 10)
-	for {
-		fmt.Printf("Enter your domain and it will resolve to ip [empty to stop]: ")
-		res := ReadString()
-		if res == "" {
-			break
-		} else if !utils.IsValidDomain(res) {
-			fmt.Println("Error: not a valid domain")
-			break
+
+	err = ReadMoreStringWithProcess("Enter your domain", func(s string) error {
+		if !utils.IsValidDomain(s) {
+			return NewWarning("not a valid domain")
 		}
 
-		domainsR = append(domainsR, res)
+		domainsR = append(domainsR, s)
 
-		ipsN, err := utils.ResolveDomainToIPs(res)
+		ipsN, err := utils.ResolveDomainToIPs(s)
 		if err != nil {
-			fmt.Printf("Error: domain resolve error (%s)\n", err.Error())
-			break
+			return NewWarning(fmt.Sprintf("domain resolve error (%s)\n", err.Error()))
 		} else if ipsN == nil {
-			fmt.Println("Error: domain without ip")
-			break
-		} else {
-			fmt.Printf("Domain %s resolve result: \n", res)
-			for _, i := range ipsN {
-				fmt.Printf("  - %s\n", i.String())
-			}
-			fmt.Printf("Domain %s resolve finished.\n", res)
+			return NewWarning("domain without ip")
 		}
 
-		domainsRS = append(domainsRS, res)
+		fmt.Printf("Domain %s resolve result: \n", s)
+		for _, i := range ipsN {
+			fmt.Printf("  - %s\n", i.String())
+		}
+		fmt.Printf("Domain %s resolve finished.\n", s)
+
+		domainsRS = append(domainsRS, s)
 		ipsR = append(ipsR, ipsN...)
+
+		return nil
+	})
+	if err != nil {
+		fmt.Printf("Error: %s\n", err.Error())
+		return
 	}
 
 	fmt.Printf("Add the domain in cert? ")
@@ -703,18 +856,29 @@ func CreateUserCertFromRCA() {
 
 	ips = append(ips, ipsR...)
 
-	org, cn = sysinfo.CreateCASubjectLong(org, cn, domains, ips, emails, urls)
-
 	fmt.Printf("Set a password for private key: ")
 	password := ReadPassword()
 
-	dirPath := path.Join(home, "cert", fmt.Sprintf("%s-%s-%s-%s-%s", rcaCert.Subject.Organization[0], rcaCert.Subject.CommonName, org, cn, notBefore.Format("2006-01-02-15-04-05")))
+	err = subject.SetCNIfEmpty()
+	if err != nil {
+		fmt.Printf("Error: %s\n", err)
+		return
+	}
+
+	_, dirPath, err := ReadDir(homeCert, "CERT-", subject)
+	if err != nil {
+		fmt.Printf("Error: %s", err.Error())
+		return
+	}
+
 	infoPath := path.Join(dirPath, "cert-info.gob")
 	cert1Path := path.Join(dirPath, "cert.pem")
 	cert2Path := path.Join(dirPath, "cert.cer")
 	fullchain1Path := path.Join(dirPath, "fullchain.pem")
 	fullchain2Path := path.Join(dirPath, "fullchain.cer")
 	keyPath := path.Join(dirPath, "key.pem")
+	spxPath := path.Join(dirPath, "cert.spx")
+	pfxPath := path.Join(dirPath, "cert.pfx")
 
 	if utils.IsExists(cert1Path) || utils.IsExists(cert2Path) || utils.IsExists(fullchain1Path) || utils.IsExists(fullchain2Path) || utils.IsExists(keyPath) {
 		fmt.Printf("There is a duplicate file, it will be overwritten. Do you confirm to save the certificate?")
@@ -730,31 +894,43 @@ func CreateUserCertFromRCA() {
 
 	err = os.MkdirAll(dirPath, 0600)
 	if err != nil {
-		fmt.Println("Error:", err)
+		fmt.Printf("Error: %s\n", err.Error())
 		return
 	}
 
-	userCert, key, certInfo, err := cert.CreateCert(infoPath, rcaInfo, cryptoType, keyLength, org, cn, domains, ips, emails, urls, notBefore, notAfter, rcaCert, rcaKey)
+	userCert, key, certInfo, err := cert.CreateCert(infoPath, rcaInfo, cryptoType, keyLength, subject, keyUseage, extKeyUseage, domains, ips, emails, urls, notBefore, notAfter, rcaCert, rcaKey)
 	if err != nil {
-		fmt.Println("Error:", err)
+		fmt.Printf("Error: %s\n", err.Error())
 		return
 	}
 
 	err = certInfo.SaveCertInfo()
 	if err != nil {
-		fmt.Println("Error:", err)
+		fmt.Printf("Error: %s\n", err.Error())
 		return
 	}
 
 	err = utils.SaveCertificate(userCert, rcaFullchain, cert1Path, cert2Path, fullchain1Path, fullchain2Path)
 	if err != nil {
-		fmt.Println("Error:", err)
+		fmt.Printf("Error: %s\n", err.Error())
 		return
 	}
 
 	err = utils.SavePrivateKey(key, password, keyPath)
 	if err != nil {
-		fmt.Println("Error:", err)
+		fmt.Printf("Error: %s\n", err.Error())
+		return
+	}
+
+	err = utils.SaveSPX(key, password, userCert, rcaFullchain, spxPath)
+	if err != nil {
+		fmt.Printf("Error: %s\n", err.Error())
+		return
+	}
+
+	err = utils.SavePFX(key, password, userCert, rcaFullchain, pfxPath)
+	if err != nil {
+		fmt.Printf("Error: %s\n", err.Error())
 		return
 	}
 
@@ -799,11 +975,11 @@ func CreateUserCertFromICA() {
 
 	fmt.Println("Crypto: ", cryptoType, keyLength)
 
-	fmt.Printf("Org: ")
-	org := ReadString()
-
-	fmt.Printf("Common Name: ")
-	cn := ReadString()
+	subject, err := ReadSubject()
+	if err != nil {
+		fmt.Printf("Error: %s\n", err.Error())
+		return
+	}
 
 	fmt.Printf("Validity: ")
 	validity := ReadTimeDuration(time.Hour * 24 * 365 * 5)
@@ -811,31 +987,39 @@ func CreateUserCertFromICA() {
 	notBefore := time.Now()
 	notAfter := notBefore.Add(validity)
 
-	domains := make([]string, 0, 10)
-	for {
-		fmt.Printf("Enter your domain [empty to stop]: ")
-		res := ReadString()
-		if res == "" {
-			break
-		} else {
-			domains = append(domains, res)
-		}
+	keyUseage, err := ReadKeyUsage("cert")
+	if err != nil {
+		fmt.Printf("Error: %s\n", err.Error())
+		return
 	}
 
-	ips := make([]net.IP, 0, 10)
-	for {
-		fmt.Printf("Enter your ip [empty to stop]: ")
-		res := ReadString()
-		if res == "" {
-			break
-		} else {
-			ip := net.ParseIP(res)
-			if ip == nil {
-				fmt.Println("Error: not a valid ip")
-			}
+	extKeyUseage, err := ReadExtKeyUsage()
+	if err != nil {
+		fmt.Printf("Error: %s\n", err.Error())
+		return
+	}
 
-			ips = append(ips, ip)
+	domains, err := ReadMoreStringWithPolicy("Enter your domain", func(s string) (string, error) {
+		if !utils.IsValidDomain(s) {
+			return "", NewWarning("not a valid domain")
 		}
+		return s, nil
+	})
+	if err != nil {
+		fmt.Printf("Error: %s\n", err.Error())
+		return
+	}
+
+	ips, err := ReadMoreStringWithPolicy("Enter your IPv4/IPv6", func(s string) (net.IP, error) {
+		ip := net.ParseIP(s)
+		if ip == nil {
+			return nil, NewWarning("not a valid ip")
+		}
+		return ip, nil
+	})
+	if err != nil {
+		fmt.Printf("Error: %s\n", err.Error())
+		return
 	}
 
 	fmt.Printf("Now we need to add your email (if you have), do you want to check it from DNS? ")
@@ -846,86 +1030,71 @@ func CreateUserCertFromICA() {
 		StillAddEmail = ReadBoolDefaultYesPrint()
 	}
 
-	emails := make([]string, 0, 10)
-	for {
-		fmt.Printf("Enter your email [empty to stop]: ")
-		res := ReadString()
-		if res == "" {
-			break
-		} else {
-			email, err := mail.ParseAddress(res)
-			if err != nil {
-				fmt.Printf("Error: not a valid email (%s)\n", err.Error())
-				break
-			} else if !utils.IsValidEmail(email.Address) {
-				fmt.Println("Error: not a valid email")
-				break
-			} else if checkEmail {
-				if utils.CheckEmailMX(email) {
-					fmt.Printf("OK: email (%s) check success\n", res)
-				} else {
-					if StillAddEmail {
-						fmt.Printf("Warn: email (%s) check failed\n", res)
-					} else {
-						fmt.Printf("Error: email (%s) check failed\n", res)
-						break
-					}
+	emails, err := ReadMoreStringWithPolicy("Enter your email", func(s string) (string, error) {
+		email, err := mail.ParseAddress(s)
+		if err != nil {
+			return "", NewWarning(fmt.Sprintf("not a valid email (%s)", err.Error()))
+		} else if !utils.IsValidEmail(email.Address) {
+			return "", NewWarning("not a valid email (%s)")
+		} else if checkEmail {
+			if !utils.CheckEmailMX(email) {
+				if !StillAddEmail {
+					return "", NewWarning(fmt.Sprintf("email (%s) check failed\n", s))
 				}
 			}
-
-			emails = append(emails, email.Address)
 		}
+		return email.Address, nil
+	})
+	if err != nil {
+		fmt.Printf("Error: %s\n", err.Error())
+		return
 	}
 
-	urls := make([]*url.URL, 0, 10)
-	for {
-		fmt.Printf("Enter your URL [empty to stop]: ")
-		res := ReadString()
-		if res == "" {
-			break
-		} else {
-			u, err := url.Parse(res)
-			if err != nil {
-				fmt.Printf("Error: not a valid URL (%s)\n", err.Error())
-				break
-			}
-
-			urls = append(urls, u)
+	urls, err := ReadMoreStringWithPolicy("Enter your URL", func(s string) (*url.URL, error) {
+		u, err := url.Parse(s)
+		if err != nil {
+			return nil, NewWarning("not a valid url")
 		}
+
+		return u, nil
+	})
+	if err != nil {
+		fmt.Printf("Error: %s\n", err.Error())
+		return
 	}
 
 	domainsR := make([]string, 0, 10)
 	domainsRS := make([]string, 0, 10)
 	ipsR := make([]net.IP, 0, 10)
-	for {
-		fmt.Printf("Enter your domain and it will resolve to ip [empty to stop]: ")
-		res := ReadString()
-		if res == "" {
-			break
-		} else if !utils.IsValidDomain(res) {
-			fmt.Println("Error: not a valid domain")
-			break
+
+	err = ReadMoreStringWithProcess("Enter your domain", func(s string) error {
+		if !utils.IsValidDomain(s) {
+			return NewWarning("not a valid domain")
 		}
 
-		domainsR = append(domainsR, res)
+		domainsR = append(domainsR, s)
 
-		ipsN, err := utils.ResolveDomainToIPs(res)
+		ipsN, err := utils.ResolveDomainToIPs(s)
 		if err != nil {
-			fmt.Printf("Error: domain resolve error (%s)\n", err.Error())
-			break
+			return NewWarning(fmt.Sprintf("domain resolve error (%s)\n", err.Error()))
 		} else if ipsN == nil {
-			fmt.Println("Error: domain without ip")
-			break
-		} else {
-			fmt.Printf("Domain %s resolve result: \n", res)
-			for _, i := range ipsN {
-				fmt.Printf("  - %s\n", i.String())
-			}
-			fmt.Printf("Domain %s resolve finished.\n", res)
+			return NewWarning("domain without ip")
 		}
 
-		domainsRS = append(domainsRS, res)
+		fmt.Printf("Domain %s resolve result: \n", s)
+		for _, i := range ipsN {
+			fmt.Printf("  - %s\n", i.String())
+		}
+		fmt.Printf("Domain %s resolve finished.\n", s)
+
+		domainsRS = append(domainsRS, s)
 		ipsR = append(ipsR, ipsN...)
+
+		return nil
+	})
+	if err != nil {
+		fmt.Printf("Error: %s\n", err.Error())
+		return
 	}
 
 	fmt.Printf("Add the domain in cert? ")
@@ -940,18 +1109,29 @@ func CreateUserCertFromICA() {
 
 	ips = append(ips, ipsR...)
 
-	org, cn = sysinfo.CreateCASubjectLong(org, cn, domains, ips, emails, urls)
-
 	fmt.Printf("Set a password for private key: ")
 	password := ReadPassword()
 
-	dirPath := path.Join(home, "cert", fmt.Sprintf("%s-%s-%s-%s-%s", icaCert.Subject.Organization[0], icaCert.Subject.CommonName, org, cn, notBefore.Format("2006-01-02-15-04-05")))
+	err = subject.SetCNIfEmpty()
+	if err != nil {
+		fmt.Printf("Error: %s\n", err)
+		return
+	}
+
+	_, dirPath, err := ReadDir(homeCert, "CERT-", subject)
+	if err != nil {
+		fmt.Printf("Error: %s", err.Error())
+		return
+	}
+
 	infoPath := path.Join(dirPath, "cert-info.gob")
 	cert1Path := path.Join(dirPath, "cert.pem")
 	cert2Path := path.Join(dirPath, "cert.cer")
 	fullchain1Path := path.Join(dirPath, "fullchain.pem")
 	fullchain2Path := path.Join(dirPath, "fullchain.cer")
 	keyPath := path.Join(dirPath, "key.pem")
+	spxPath := path.Join(dirPath, "cert.spx")
+	pfxPath := path.Join(dirPath, "cert.pfx")
 
 	if utils.IsExists(cert1Path) || utils.IsExists(cert2Path) || utils.IsExists(fullchain1Path) || utils.IsExists(fullchain2Path) || utils.IsExists(keyPath) {
 		fmt.Printf("There is a duplicate file, it will be overwritten. Do you confirm to save the certificate?")
@@ -967,31 +1147,43 @@ func CreateUserCertFromICA() {
 
 	err = os.MkdirAll(dirPath, 0600)
 	if err != nil {
-		fmt.Println("Error:", err)
+		fmt.Printf("Error: %s\n", err.Error())
 		return
 	}
 
-	userCert, key, certInfo, err := cert.CreateCert(infoPath, icaInfo, cryptoType, keyLength, org, cn, domains, ips, emails, urls, notBefore, notAfter, icaCert, icaKey)
+	userCert, key, certInfo, err := cert.CreateCert(infoPath, icaInfo, cryptoType, keyLength, subject, keyUseage, extKeyUseage, domains, ips, emails, urls, notBefore, notAfter, icaCert, icaKey)
 	if err != nil {
-		fmt.Println("Error:", err)
+		fmt.Printf("Error: %s\n", err.Error())
 		return
 	}
 
 	err = certInfo.SaveCertInfo()
 	if err != nil {
-		fmt.Println("Error:", err)
+		fmt.Printf("Error: %s\n", err.Error())
 		return
 	}
 
 	err = utils.SaveCertificate(userCert, icaFullchain, cert1Path, cert2Path, fullchain1Path, fullchain2Path)
 	if err != nil {
-		fmt.Println("Error:", err)
+		fmt.Printf("Error: %s\n", err.Error())
 		return
 	}
 
 	err = utils.SavePrivateKey(key, password, keyPath)
 	if err != nil {
-		fmt.Println("Error:", err)
+		fmt.Printf("Error: %s\n", err.Error())
+		return
+	}
+
+	err = utils.SaveSPX(key, password, userCert, icaFullchain, spxPath)
+	if err != nil {
+		fmt.Printf("Error: %s\n", err.Error())
+		return
+	}
+
+	err = utils.SavePFX(key, password, userCert, icaFullchain, pfxPath)
+	if err != nil {
+		fmt.Printf("Error: %s\n", err.Error())
 		return
 	}
 
@@ -1030,11 +1222,11 @@ func CreateUserCertSelf() {
 
 	fmt.Println("Crypto: ", cryptoType, keyLength)
 
-	fmt.Printf("Org: ")
-	org := ReadString()
-
-	fmt.Printf("Common Name: ")
-	cn := ReadString()
+	subject, err := ReadSubject()
+	if err != nil {
+		fmt.Printf("Error: %s\n", err.Error())
+		return
+	}
 
 	fmt.Printf("Validity: ")
 	validity := ReadTimeDuration(time.Hour * 24 * 365 * 5)
@@ -1042,34 +1234,39 @@ func CreateUserCertSelf() {
 	notBefore := time.Now()
 	notAfter := notBefore.Add(validity)
 
-	domains := make([]string, 0, 10)
-	for {
-		fmt.Printf("Enter your domain [empty to stop]: ")
-		res := ReadString()
-		if res == "" {
-			break
-		} else if !utils.IsValidDomain(res) {
-			fmt.Println("Error: not a valid domain")
-			break
-		}
-		domains = append(domains, res)
+	keyUseage, err := ReadKeyUsage("cert")
+	if err != nil {
+		fmt.Printf("Error: %s\n", err.Error())
+		return
 	}
 
-	ips := make([]net.IP, 0, 10)
-	for {
-		fmt.Printf("Enter your ip [empty to stop]: ")
-		res := ReadString()
-		if res == "" {
-			break
-		} else {
-			ip := net.ParseIP(res)
-			if ip == nil {
-				fmt.Println("Error: not a valid ip")
-				break
-			}
+	extKeyUseage, err := ReadExtKeyUsage()
+	if err != nil {
+		fmt.Printf("Error: %s\n", err.Error())
+		return
+	}
 
-			ips = append(ips, ip)
+	domains, err := ReadMoreStringWithPolicy("Enter your domain", func(s string) (string, error) {
+		if !utils.IsValidDomain(s) {
+			return "", NewWarning("not a valid domain")
 		}
+		return s, nil
+	})
+	if err != nil {
+		fmt.Printf("Error: %s\n", err.Error())
+		return
+	}
+
+	ips, err := ReadMoreStringWithPolicy("Enter your IPv4/IPv6", func(s string) (net.IP, error) {
+		ip := net.ParseIP(s)
+		if ip == nil {
+			return nil, NewWarning("not a valid ip")
+		}
+		return ip, nil
+	})
+	if err != nil {
+		fmt.Printf("Error: %s\n", err.Error())
+		return
 	}
 
 	fmt.Printf("Now we need to add your email (if you have), do you want to check it from DNS? ")
@@ -1080,86 +1277,71 @@ func CreateUserCertSelf() {
 		StillAddEmail = ReadBoolDefaultYesPrint()
 	}
 
-	emails := make([]string, 0, 10)
-	for {
-		fmt.Printf("Enter your email [empty to stop]: ")
-		res := ReadString()
-		if res == "" {
-			break
-		} else {
-			email, err := mail.ParseAddress(res)
-			if err != nil {
-				fmt.Printf("Error: not a valid email (%s)\n", err.Error())
-				break
-			} else if !utils.IsValidEmail(email.Address) {
-				fmt.Println("Error: not a valid email")
-				break
-			} else if checkEmail {
-				if utils.CheckEmailMX(email) {
-					fmt.Printf("OK: email (%s) check success\n", res)
-				} else {
-					if StillAddEmail {
-						fmt.Printf("Warn: email (%s) check failed\n", res)
-					} else {
-						fmt.Printf("Error: email (%s) check failed\n", res)
-						break
-					}
+	emails, err := ReadMoreStringWithPolicy("Enter your email", func(s string) (string, error) {
+		email, err := mail.ParseAddress(s)
+		if err != nil {
+			return "", NewWarning(fmt.Sprintf("not a valid email (%s)", err.Error()))
+		} else if !utils.IsValidEmail(email.Address) {
+			return "", NewWarning("not a valid email (%s)")
+		} else if checkEmail {
+			if !utils.CheckEmailMX(email) {
+				if !StillAddEmail {
+					return "", NewWarning(fmt.Sprintf("email (%s) check failed\n", s))
 				}
 			}
-
-			emails = append(emails, email.Address)
 		}
+		return email.Address, nil
+	})
+	if err != nil {
+		fmt.Printf("Error: %s\n", err.Error())
+		return
 	}
 
-	urls := make([]*url.URL, 0, 10)
-	for {
-		fmt.Printf("Enter your URL [empty to stop]: ")
-		res := ReadString()
-		if res == "" {
-			break
-		} else {
-			u, err := url.Parse(res)
-			if err != nil {
-				fmt.Printf("Error: not a valid URL (%s)\n", err.Error())
-				break
-			}
-
-			urls = append(urls, u)
+	urls, err := ReadMoreStringWithPolicy("Enter your URL", func(s string) (*url.URL, error) {
+		u, err := url.Parse(s)
+		if err != nil {
+			return nil, NewWarning("not a valid url")
 		}
+
+		return u, nil
+	})
+	if err != nil {
+		fmt.Printf("Error: %s\n", err.Error())
+		return
 	}
 
 	domainsR := make([]string, 0, 10)
 	domainsRS := make([]string, 0, 10)
 	ipsR := make([]net.IP, 0, 10)
-	for {
-		fmt.Printf("Enter your domain and it will resolve to ip [empty to stop]: ")
-		res := ReadString()
-		if res == "" {
-			break
-		} else if !utils.IsValidDomain(res) {
-			fmt.Println("Error: not a valid domain")
-			break
+
+	err = ReadMoreStringWithProcess("Enter your domain", func(s string) error {
+		if !utils.IsValidDomain(s) {
+			return NewWarning("not a valid domain")
 		}
 
-		domainsR = append(domainsR, res)
+		domainsR = append(domainsR, s)
 
-		ipsN, err := utils.ResolveDomainToIPs(res)
+		ipsN, err := utils.ResolveDomainToIPs(s)
 		if err != nil {
-			fmt.Printf("Error: domain resolve error (%s)\n", err.Error())
-			break
+			return NewWarning(fmt.Sprintf("domain resolve error (%s)\n", err.Error()))
 		} else if ipsN == nil {
-			fmt.Println("Error: domain without ip")
-			break
-		} else {
-			fmt.Printf("Domain %s resolve result: \n", res)
-			for _, i := range ipsN {
-				fmt.Printf("  - %s\n", i.String())
-			}
-			fmt.Printf("Domain %s resolve finished.\n", res)
+			return NewWarning("domain without ip")
 		}
 
-		domainsRS = append(domainsRS, res)
+		fmt.Printf("Domain %s resolve result: \n", s)
+		for _, i := range ipsN {
+			fmt.Printf("  - %s\n", i.String())
+		}
+		fmt.Printf("Domain %s resolve finished.\n", s)
+
+		domainsRS = append(domainsRS, s)
 		ipsR = append(ipsR, ipsN...)
+
+		return nil
+	})
+	if err != nil {
+		fmt.Printf("Error: %s\n", err.Error())
+		return
 	}
 
 	fmt.Printf("Add the domain in cert? ")
@@ -1173,8 +1355,6 @@ func CreateUserCertSelf() {
 	}
 
 	ips = append(ips, ipsR...)
-
-	org, cn = sysinfo.CreateCASubjectLong(org, cn, domains, ips, emails, urls)
 
 	ocspURLs := make([]string, 0, 10)
 	for {
@@ -1239,13 +1419,26 @@ func CreateUserCertSelf() {
 	fmt.Printf("Set a password for private key: ")
 	password := ReadPassword()
 
-	dirPath := path.Join(home, "cert", fmt.Sprintf("Self-%s-%s-%s", cn, org, notBefore.Format("2006-01-02-15-04-05")))
+	err = subject.SetCNIfEmpty()
+	if err != nil {
+		fmt.Printf("Error: %s\n", err)
+		return
+	}
+
+	_, dirPath, err := ReadDir(homeCert, "SELF-CERT-", subject)
+	if err != nil {
+		fmt.Printf("Error: %s", err.Error())
+		return
+	}
+
 	infoPath := path.Join(dirPath, "cert-info.gob")
 	cert1Path := path.Join(dirPath, "cert.pem")
 	cert2Path := path.Join(dirPath, "cert.cer")
 	fullchain1Path := path.Join(dirPath, "fullchain.pem")
 	fullchain2Path := path.Join(dirPath, "fullchain.cer")
 	keyPath := path.Join(dirPath, "key.pem")
+	spxPath := path.Join(dirPath, "cert.spx")
+	pfxPath := path.Join(dirPath, "cert.pfx")
 
 	if utils.IsExists(cert1Path) || utils.IsExists(cert2Path) || utils.IsExists(fullchain1Path) || utils.IsExists(fullchain2Path) || utils.IsExists(keyPath) {
 		fmt.Printf("There is a duplicate file, it will be overwritten. Do you confirm to save the certificate?")
@@ -1259,33 +1452,45 @@ func CreateUserCertSelf() {
 		}
 	}
 
-	err := os.MkdirAll(dirPath, 0600)
+	err = os.MkdirAll(dirPath, 0600)
 	if err != nil {
-		fmt.Println("Error:", err)
+		fmt.Printf("Error: %s\n", err.Error())
 		return
 	}
 
-	userCert, key, certInfo, err := cert.CreateSelfCert(infoPath, cryptoType, keyLength, org, cn, domains, ips, emails, urls, ocspURLs, issurURLs, crlURLs, notBefore, notAfter)
+	userCert, key, certInfo, err := cert.CreateSelfCert(infoPath, cryptoType, keyLength, subject, keyUseage, extKeyUseage, domains, ips, emails, urls, ocspURLs, issurURLs, crlURLs, notBefore, notAfter)
 	if err != nil {
-		fmt.Println("Error:", err)
+		fmt.Printf("Error: %s\n", err.Error())
 		return
 	}
 
 	err = certInfo.SaveSelfCert()
 	if err != nil {
-		fmt.Println("Error:", err)
+		fmt.Printf("Error: %s\n", err.Error())
 		return
 	}
 
 	err = utils.SaveCertificate(userCert, []byte{}, cert1Path, cert2Path, fullchain1Path, fullchain2Path)
 	if err != nil {
-		fmt.Println("Error:", err)
+		fmt.Printf("Error: %s\n", err.Error())
 		return
 	}
 
 	err = utils.SavePrivateKey(key, password, keyPath)
 	if err != nil {
-		fmt.Println("Error:", err)
+		fmt.Printf("Error: %s\n", err.Error())
+		return
+	}
+
+	err = utils.SaveSPX(key, password, userCert, []byte{}, spxPath)
+	if err != nil {
+		fmt.Printf("Error: %s\n", err.Error())
+		return
+	}
+
+	err = utils.SavePFX(key, password, userCert, []byte{}, pfxPath)
+	if err != nil {
+		fmt.Printf("Error: %s\n", err.Error())
 		return
 	}
 

@@ -6,10 +6,9 @@ import (
 	"crypto/elliptic"
 	"crypto/rsa"
 	"crypto/x509"
-	"crypto/x509/pkix"
 	"encoding/gob"
 	"fmt"
-	"github.com/SongZihuan/MyCA/src/sysinfo"
+	"github.com/SongZihuan/MyCA/src/global"
 	"github.com/SongZihuan/MyCA/src/utils"
 	"math/big"
 	"net"
@@ -19,7 +18,7 @@ import (
 )
 
 type CAInfo interface {
-	NewCert() *big.Int
+	NewCertSerialNumber() (*big.Int, error)
 	GetIssuingCertificateURL() []string
 	GetOCSPServer() []string
 	GetCRLDistributionPoints() []string
@@ -85,9 +84,8 @@ func (info *CertInfo) SaveCertInfo() error {
 	return nil
 }
 
-func (info *CertInfo) GetSerialNumber() *big.Int {
-	info.SerialNumber = info.CA.NewCert()
-	return info.SerialNumber
+func (info *CertInfo) GetSerialNumber() (*big.Int, error) {
+	return info.CA.NewCertSerialNumber()
 }
 
 func (info *CertInfo) NewCert() *big.Int {
@@ -99,13 +97,24 @@ func (info *CertInfo) GetIssuingCertificateURL() []string {
 }
 
 // CreateCert 创建由CA签名的IP、域名证书
-func CreateCert(infoFilePath string, caInfo CAInfo, cryptoType utils.CryptoType, keyLength int, org string, cn string, domains []string, ips []net.IP, emails []string, urls []*url.URL, notBefore time.Time, notAfter time.Time, ca *x509.Certificate, caKey crypto.PrivateKey) (*x509.Certificate, crypto.PrivateKey, *CertInfo, error) {
+func CreateCert(infoFilePath string, caInfo CAInfo, cryptoType utils.CryptoType, keyLength int, subject *global.CertSubject, keyUsage x509.KeyUsage, extKeyUsage []x509.ExtKeyUsage, domains []string, ips []net.IP, emails []string, urls []*url.URL, notBefore time.Time, notAfter time.Time, ca *x509.Certificate, caKey crypto.PrivateKey) (*x509.Certificate, crypto.PrivateKey, *CertInfo, error) {
 	var privKey crypto.PrivateKey
-	var pubKey interface{}
+	var pubKey crypto.PublicKey
 
 	info, err := NewCertInfo(infoFilePath, caInfo)
 	if err != nil {
 		return nil, nil, nil, err
+	}
+
+	err = subject.SetCNIfEmpty() // 兜底，确保CN被设置
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	if extKeyUsage == nil {
+		extKeyUsage = make([]x509.ExtKeyUsage, 0, 0)
+	} else {
+		extKeyUsage = utils.CopySlice(extKeyUsage)
 	}
 
 	switch cryptoType {
@@ -153,25 +162,35 @@ func CreateCert(infoFilePath string, caInfo CAInfo, cryptoType utils.CryptoType,
 		notAfter = notBefore.Add(time.Hour * 24 * 365 * 5) // 5年
 	}
 
-	org, cn = sysinfo.CreateCASubjectLong(org, cn, domains, ips, emails, urls)
+	ski, err := utils.CalculateSubjectKeyIdentifier(pubKey)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("get subject key indentifier failed: %s", err.Error())
+	}
+
+	serialNumber, err := info.GetSerialNumber()
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("get new serial number failed: %s", err.Error())
+	}
 
 	template := &x509.Certificate{
-		SerialNumber: info.GetSerialNumber(),
-		Subject: pkix.Name{
-			Organization: []string{org},
-			CommonName:   cn,
-		},
-		NotBefore: notBefore,
-		NotAfter:  notAfter,
+		SerialNumber: serialNumber,
+		Subject:      subject.ToPkixName(),
+		NotBefore:    notBefore,
+		NotAfter:     notAfter,
 
-		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
-		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageAny}, // 允许全部扩展用途
+		KeyUsage:    keyUsage,
+		ExtKeyUsage: extKeyUsage, // 允许全部扩展用途
+
 		BasicConstraintsValid: true,
 		IsCA:                  false,
-		DNSNames:              domains,
-		IPAddresses:           ips,
-		EmailAddresses:        emails,
-		URIs:                  urls,
+
+		DNSNames:       domains,
+		IPAddresses:    ips,
+		EmailAddresses: emails,
+		URIs:           urls,
+
+		SubjectKeyId:   []byte(ski),
+		AuthorityKeyId: ca.SubjectKeyId,
 
 		// 此处CA证书和终端证书不同，CA显示自己的吊销列表，终端证书显示对于CA的吊销列表
 		OCSPServer:            info.CA.GetOCSPServer(),

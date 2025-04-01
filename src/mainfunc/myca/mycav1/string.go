@@ -12,8 +12,8 @@ const menu = `Menu:
   9) Exit`
 
 const cryptoMenu = `Crypto Menu:
- 1) RSA 2048
- 2) RSA 4096
- 3) ECDSA P256
- 4) ECDSA P384
- 5) ECDSA P521`
+ 1) RSA 2048 (Good compatibility)
+ 2) RSA 4096 (Compatible and safe but more complex)
+ 3) ECDSA P256 (Safe and recommend)
+ 4) ECDSA P384 (Safe and recommend)
+ 5) ECDSA P521 (Bad compatibility and not recommend)`
