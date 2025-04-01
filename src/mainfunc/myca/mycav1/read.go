@@ -136,7 +136,7 @@ func ReadSubject() (*global.CertSubject, error) {
 		return nil, err
 	}
 
-	_o := ReadMoreString("Enter the organization or company name")
+	_o := ReadMoreString("Enter the Organization or Company name")
 	if len(_o) != 0 {
 		err = res.Set("O", _o)
 		if err != nil {
@@ -392,33 +392,84 @@ func ReadKeyUsage(certType string) (x509.KeyUsage, error) {
 	var addRecord = make(map[x509.KeyUsage]bool, len(KeyUsageList))
 
 	fmt.Printf("Now we should setting the key usage.")
+
 	switch strings.ToLower(certType) {
 	case "ica":
 		fallthrough
 	case "rca":
-		fmt.Printf("The KeyUsageCertSign and KeyUsageCRLSign must be choose.")
-		res |= x509.KeyUsageCertSign
-		res |= x509.KeyUsageCRLSign
-
-		addRecord[x509.KeyUsageCertSign] = true
-		addRecord[x509.KeyUsageCRLSign] = true
+		fmt.Printf("Do you want to add the default key usage (KeyUsageCertSign and KeyUsageCRLSign) ?")
 	case "new_cert":
-		fmt.Printf("The KeyUsageDigitalSignature must be choose.")
-		res |= x509.KeyUsageDigitalSignature
-
-		addRecord[x509.KeyUsageDigitalSignature] = true
+		fmt.Printf("Do you want to add the default key usage (KeyUsageDigitalSignature) ?")
 	case "old_cert":
-		fmt.Printf("The KeyUsageKeyEncipherment must be choose.")
-		res |= x509.KeyUsageKeyEncipherment
-
-		addRecord[x509.KeyUsageKeyEncipherment] = true
+		fmt.Printf("Do you want to add the default key usage (KeyUsageKeyEncipherment) ?")
+	case "auto_cert":
+		fmt.Printf("Do you want to add the default key usage (KeyUsageDigitalSignature or KeyUsageKeyEncipherment) ?")
 	case "cert":
-		fmt.Printf("The KeyUsageDigitalSignature and KeyUsageKeyEncipherment must be choose.")
-		res |= x509.KeyUsageDigitalSignature
-		res |= x509.KeyUsageKeyEncipherment
+		fmt.Printf("Do you want to add the default key usage (KeyUsageDigitalSignature and KeyUsageKeyEncipherment) ?")
+	}
 
-		addRecord[x509.KeyUsageDigitalSignature] = true
-		addRecord[x509.KeyUsageKeyEncipherment] = true
+	if ReadBoolDefaultYesPrint() {
+		switch strings.ToLower(certType) {
+		case "ica":
+			fallthrough
+		case "rca":
+			fmt.Println("The KeyUsageCertSign and KeyUsageCRLSign be choose.")
+			res |= x509.KeyUsageCertSign
+			res |= x509.KeyUsageCRLSign
+
+			addRecord[x509.KeyUsageCertSign] = true
+			addRecord[x509.KeyUsageCRLSign] = true
+		case "new_cert":
+			fmt.Println("The KeyUsageDigitalSignature be choose.")
+			res |= x509.KeyUsageDigitalSignature
+
+			addRecord[x509.KeyUsageDigitalSignature] = true
+		case "old_cert":
+			fmt.Println("The KeyUsageKeyEncipherment must be choose.")
+			res |= x509.KeyUsageKeyEncipherment
+
+			addRecord[x509.KeyUsageKeyEncipherment] = true
+		case "auto_cert":
+			fmt.Printf("What kind of certificate do you want to generate? Newer (with key exchange) / Older (with key encryption) / Both? [default=both/newer/older]: ")
+			switch strings.ToLower(ReadString()) {
+			case "n":
+				fallthrough
+			case "new":
+				fallthrough
+			case "newer":
+				fmt.Println("The KeyUsageDigitalSignature be choose.")
+				res |= x509.KeyUsageDigitalSignature
+
+				addRecord[x509.KeyUsageDigitalSignature] = true
+			case "o":
+				fallthrough
+			case "old":
+				fallthrough
+			case "older":
+				fmt.Println("The KeyUsageKeyEncipherment be choose.")
+				res |= x509.KeyUsageKeyEncipherment
+
+				addRecord[x509.KeyUsageKeyEncipherment] = true
+			case "b":
+				fallthrough
+			case "both":
+				fallthrough
+			default:
+				fmt.Println("The KeyUsageDigitalSignature and KeyUsageKeyEncipherment be choose.")
+				res |= x509.KeyUsageDigitalSignature
+				res |= x509.KeyUsageKeyEncipherment
+
+				addRecord[x509.KeyUsageDigitalSignature] = true
+				addRecord[x509.KeyUsageKeyEncipherment] = true
+			}
+		case "cert":
+			fmt.Println("The KeyUsageDigitalSignature and KeyUsageKeyEncipherment be choose.")
+			res |= x509.KeyUsageDigitalSignature
+			res |= x509.KeyUsageKeyEncipherment
+
+			addRecord[x509.KeyUsageDigitalSignature] = true
+			addRecord[x509.KeyUsageKeyEncipherment] = true
+		}
 	}
 
 	fmt.Printf("There will show the other Key Usage that you can add to you cert: \n")
@@ -459,6 +510,7 @@ func ReadKeyUsage(certType string) (x509.KeyUsage, error) {
 }
 
 var ExtKeyUsageList = []x509.ExtKeyUsage{
+	x509.ExtKeyUsageAny,
 	x509.ExtKeyUsageServerAuth,
 	x509.ExtKeyUsageClientAuth,
 	x509.ExtKeyUsageCodeSigning,
@@ -475,6 +527,7 @@ var ExtKeyUsageList = []x509.ExtKeyUsage{
 }
 
 var ExtKeyUsageMap = map[x509.ExtKeyUsage]string{
+	x509.ExtKeyUsageAny:                            "ExtKeyUsageAny",
 	x509.ExtKeyUsageServerAuth:                     "ExtKeyUsageServerAuth",
 	x509.ExtKeyUsageClientAuth:                     "ExtKeyUsageClientAuth",
 	x509.ExtKeyUsageCodeSigning:                    "ExtKeyUsageCodeSigning",
@@ -499,16 +552,13 @@ func ReadExtKeyUsage() ([]x509.ExtKeyUsage, error) {
 	case "n":
 		fallthrough
 	case "no":
-		return res, nil
-
+		return make([]x509.ExtKeyUsage, 0, 0), nil
 	case "all":
 		fallthrough
 	case "a":
 		fallthrough
 	default:
-		res = append(res, x509.ExtKeyUsageAny)
-		return res, nil
-
+		return utils.CopySlice(ExtKeyUsageList), nil
 	case "choose":
 		fallthrough
 	case "c":

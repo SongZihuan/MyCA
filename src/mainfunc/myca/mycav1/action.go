@@ -66,13 +66,13 @@ func CreateRCA() {
 	notBefore := time.Now()
 	notAfter := notBefore.Add(validity)
 
-	keyUseage, err := ReadKeyUsage("rca")
+	keyUsage, err := ReadKeyUsage("rca")
 	if err != nil {
 		fmt.Printf("Error: %s\n", err.Error())
 		return
 	}
 
-	extKeyUseage, err := ReadExtKeyUsage()
+	extKeyUsage, err := ReadExtKeyUsage()
 	if err != nil {
 		fmt.Printf("Error: %s\n", err.Error())
 		return
@@ -191,7 +191,7 @@ func CreateRCA() {
 		return
 	}
 
-	caCert, key, rcaInfo, err := rootca.CreateRCA(infoPath, cryptoType, keyLength, subject, keyUseage, extKeyUseage, maxPathLen, ocspURLs, issurURLs, crlURLs, notBefore, notAfter)
+	caCert, key, rcaInfo, err := rootca.CreateRCA(infoPath, cryptoType, keyLength, subject, keyUsage, extKeyUsage, maxPathLen, ocspURLs, issurURLs, crlURLs, notBefore, notAfter)
 	if err != nil {
 		fmt.Printf("Error: %s\n", err.Error())
 		return
@@ -280,13 +280,13 @@ func CreateICAFromRCA() {
 	notBefore := time.Now()
 	notAfter := notBefore.Add(validity)
 
-	keyUseage, err := ReadKeyUsage("ica")
+	keyUsage, err := ReadKeyUsage("ica")
 	if err != nil {
 		fmt.Printf("Error: %s\n", err.Error())
 		return
 	}
 
-	extKeyUseage, err := ReadExtKeyUsage()
+	extKeyUsage, err := ReadExtKeyUsage()
 	if err != nil {
 		fmt.Printf("Error: %s\n", err.Error())
 		return
@@ -418,7 +418,7 @@ func CreateICAFromRCA() {
 		return
 	}
 
-	caCert, key, icaInfo, err := ica.CreateICA(infoPath, rcaInfo, cryptoType, keyLength, subject, keyUseage, extKeyUseage, maxPathLen, selfOcspURLs, selfIssurURLs, crlURLs, notBefore, notAfter, rcaCert, rcaKey)
+	caCert, key, icaInfo, err := ica.CreateICA(infoPath, rcaInfo, cryptoType, keyLength, subject, keyUsage, extKeyUsage, maxPathLen, selfOcspURLs, selfIssurURLs, crlURLs, notBefore, notAfter, rcaCert, rcaKey)
 	if err != nil {
 		fmt.Printf("Error: %s\n", err.Error())
 		return
@@ -507,13 +507,13 @@ func CreateICAFromICA() {
 	notBefore := time.Now()
 	notAfter := notBefore.Add(validity)
 
-	keyUseage, err := ReadKeyUsage("ica")
+	keyUsage, err := ReadKeyUsage("ica")
 	if err != nil {
 		fmt.Printf("Error: %s\n", err.Error())
 		return
 	}
 
-	extKeyUseage, err := ReadExtKeyUsage()
+	extKeyUsage, err := ReadExtKeyUsage()
 	if err != nil {
 		fmt.Printf("Error: %s\n", err.Error())
 		return
@@ -645,7 +645,7 @@ func CreateICAFromICA() {
 		return
 	}
 
-	caCert, key, newIcaInfo, err := ica.CreateICA(infoPath, icaInfo, cryptoType, keyLength, subject, keyUseage, extKeyUseage, maxPathLen, ocspURLs, issurURLs, crlURLs, notBefore, notAfter, icaCert, icaKey)
+	caCert, key, newIcaInfo, err := ica.CreateICA(infoPath, icaInfo, cryptoType, keyLength, subject, keyUsage, extKeyUsage, maxPathLen, ocspURLs, issurURLs, crlURLs, notBefore, notAfter, icaCert, icaKey)
 	if err != nil {
 		fmt.Printf("Error: %s\n", err.Error())
 		return
@@ -734,13 +734,13 @@ func CreateUserCertFromRCA() {
 	notBefore := time.Now()
 	notAfter := notBefore.Add(validity)
 
-	keyUseage, err := ReadKeyUsage("cert")
+	keyUsage, err := ReadKeyUsage("auto_cert")
 	if err != nil {
 		fmt.Printf("Error: %s\n", err.Error())
 		return
 	}
 
-	extKeyUseage, err := ReadExtKeyUsage()
+	extKeyUsage, err := ReadExtKeyUsage()
 	if err != nil {
 		fmt.Printf("Error: %s\n", err.Error())
 		return
@@ -780,13 +780,13 @@ func CreateUserCertFromRCA() {
 	emails, err := ReadMoreStringWithPolicy("Enter your email", func(s string) (string, error) {
 		email, err := mail.ParseAddress(s)
 		if err != nil {
-			return "", NewWarning(fmt.Sprintf("not a valid email (%s)", err.Error()))
+			return "", NewWarningF("not a valid email (%s)", err.Error())
 		} else if !utils.IsValidEmail(email.Address) {
 			return "", NewWarning("not a valid email (%s)")
 		} else if checkEmail {
 			if !utils.CheckEmailMX(email) {
 				if !StillAddEmail {
-					return "", NewWarning(fmt.Sprintf("email (%s) check failed\n", s))
+					return "", NewWarningF("email (%s) check failed\n", s)
 				}
 			}
 		}
@@ -823,7 +823,7 @@ func CreateUserCertFromRCA() {
 
 		ipsN, err := utils.ResolveDomainToIPs(s)
 		if err != nil {
-			return NewWarning(fmt.Sprintf("domain resolve error (%s)\n", err.Error()))
+			return NewWarningF("domain resolve error (%s)\n", err.Error())
 		} else if ipsN == nil {
 			return NewWarning("domain without ip")
 		}
@@ -898,7 +898,7 @@ func CreateUserCertFromRCA() {
 		return
 	}
 
-	userCert, key, certInfo, err := cert.CreateCert(infoPath, rcaInfo, cryptoType, keyLength, subject, keyUseage, extKeyUseage, domains, ips, emails, urls, notBefore, notAfter, rcaCert, rcaKey)
+	userCert, key, certInfo, err := cert.CreateCert(infoPath, rcaInfo, cryptoType, keyLength, subject, keyUsage, extKeyUsage, domains, ips, emails, urls, notBefore, notAfter, rcaCert, rcaKey)
 	if err != nil {
 		fmt.Printf("Error: %s\n", err.Error())
 		return
@@ -987,13 +987,13 @@ func CreateUserCertFromICA() {
 	notBefore := time.Now()
 	notAfter := notBefore.Add(validity)
 
-	keyUseage, err := ReadKeyUsage("cert")
+	keyUsage, err := ReadKeyUsage("auto_cert")
 	if err != nil {
 		fmt.Printf("Error: %s\n", err.Error())
 		return
 	}
 
-	extKeyUseage, err := ReadExtKeyUsage()
+	extKeyUsage, err := ReadExtKeyUsage()
 	if err != nil {
 		fmt.Printf("Error: %s\n", err.Error())
 		return
@@ -1033,13 +1033,13 @@ func CreateUserCertFromICA() {
 	emails, err := ReadMoreStringWithPolicy("Enter your email", func(s string) (string, error) {
 		email, err := mail.ParseAddress(s)
 		if err != nil {
-			return "", NewWarning(fmt.Sprintf("not a valid email (%s)", err.Error()))
+			return "", NewWarningF("not a valid email (%s)", err.Error())
 		} else if !utils.IsValidEmail(email.Address) {
 			return "", NewWarning("not a valid email (%s)")
 		} else if checkEmail {
 			if !utils.CheckEmailMX(email) {
 				if !StillAddEmail {
-					return "", NewWarning(fmt.Sprintf("email (%s) check failed\n", s))
+					return "", NewWarningF("email (%s) check failed\n", s)
 				}
 			}
 		}
@@ -1076,7 +1076,7 @@ func CreateUserCertFromICA() {
 
 		ipsN, err := utils.ResolveDomainToIPs(s)
 		if err != nil {
-			return NewWarning(fmt.Sprintf("domain resolve error (%s)\n", err.Error()))
+			return NewWarningF("domain resolve error (%s)\n", err.Error())
 		} else if ipsN == nil {
 			return NewWarning("domain without ip")
 		}
@@ -1151,7 +1151,7 @@ func CreateUserCertFromICA() {
 		return
 	}
 
-	userCert, key, certInfo, err := cert.CreateCert(infoPath, icaInfo, cryptoType, keyLength, subject, keyUseage, extKeyUseage, domains, ips, emails, urls, notBefore, notAfter, icaCert, icaKey)
+	userCert, key, certInfo, err := cert.CreateCert(infoPath, icaInfo, cryptoType, keyLength, subject, keyUsage, extKeyUsage, domains, ips, emails, urls, notBefore, notAfter, icaCert, icaKey)
 	if err != nil {
 		fmt.Printf("Error: %s\n", err.Error())
 		return
@@ -1234,13 +1234,13 @@ func CreateUserCertSelf() {
 	notBefore := time.Now()
 	notAfter := notBefore.Add(validity)
 
-	keyUseage, err := ReadKeyUsage("cert")
+	keyUsage, err := ReadKeyUsage("auto_cert")
 	if err != nil {
 		fmt.Printf("Error: %s\n", err.Error())
 		return
 	}
 
-	extKeyUseage, err := ReadExtKeyUsage()
+	extKeyUsage, err := ReadExtKeyUsage()
 	if err != nil {
 		fmt.Printf("Error: %s\n", err.Error())
 		return
@@ -1280,13 +1280,13 @@ func CreateUserCertSelf() {
 	emails, err := ReadMoreStringWithPolicy("Enter your email", func(s string) (string, error) {
 		email, err := mail.ParseAddress(s)
 		if err != nil {
-			return "", NewWarning(fmt.Sprintf("not a valid email (%s)", err.Error()))
+			return "", NewWarningF("not a valid email (%s)", err.Error())
 		} else if !utils.IsValidEmail(email.Address) {
 			return "", NewWarning("not a valid email (%s)")
 		} else if checkEmail {
 			if !utils.CheckEmailMX(email) {
 				if !StillAddEmail {
-					return "", NewWarning(fmt.Sprintf("email (%s) check failed\n", s))
+					return "", NewWarningF("email (%s) check failed\n", s)
 				}
 			}
 		}
@@ -1323,7 +1323,7 @@ func CreateUserCertSelf() {
 
 		ipsN, err := utils.ResolveDomainToIPs(s)
 		if err != nil {
-			return NewWarning(fmt.Sprintf("domain resolve error (%s)\n", err.Error()))
+			return NewWarningF("domain resolve error (%s)\n", err.Error())
 		} else if ipsN == nil {
 			return NewWarning("domain without ip")
 		}
@@ -1458,7 +1458,7 @@ func CreateUserCertSelf() {
 		return
 	}
 
-	userCert, key, certInfo, err := cert.CreateSelfCert(infoPath, cryptoType, keyLength, subject, keyUseage, extKeyUseage, domains, ips, emails, urls, ocspURLs, issurURLs, crlURLs, notBefore, notAfter)
+	userCert, key, certInfo, err := cert.CreateSelfCert(infoPath, cryptoType, keyLength, subject, keyUsage, extKeyUsage, domains, ips, emails, urls, ocspURLs, issurURLs, crlURLs, notBefore, notAfter)
 	if err != nil {
 		fmt.Printf("Error: %s\n", err.Error())
 		return
