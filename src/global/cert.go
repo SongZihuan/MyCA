@@ -134,12 +134,12 @@ func (c *CertSubject) SetCNIfEmpty(args ...any) error {
 func (c *CertSubject) ToPkixName() pkix.Name {
 	return pkix.Name{
 		Country:            utils.CopySlice(c.C),
-		Organization:       utils.CopySlice(c.C),
-		OrganizationalUnit: utils.CopySlice(c.C),
-		Locality:           utils.CopySlice(c.C),
-		Province:           utils.CopySlice(c.C),
-		StreetAddress:      utils.CopySlice(c.C),
-		PostalCode:         utils.CopySlice(c.C),
+		Province:           utils.CopySlice(c.ST),
+		Locality:           utils.CopySlice(c.L),
+		Organization:       utils.CopySlice(c.O),
+		OrganizationalUnit: utils.CopySlice(c.OU),
+		StreetAddress:      utils.CopySlice(c.SA),
+		PostalCode:         utils.CopySlice(c.PC),
 		CommonName:         c.CN,
 		SerialNumber:       "", // 与证书的`SerialNumber`不同，默认可以不设置
 	}
