@@ -152,6 +152,11 @@ func ReadSubject() (*global.CertSubject, error) {
 		}
 	}
 
+	err = res.Set("OU", ReadMoreString("Enter the Organization Unit or Company Unit name"))
+	if err != nil {
+		return nil, err
+	}
+
 	err = res.Set("SA", ReadMoreString("Enter the StreetAddress"))
 	if err != nil {
 		return nil, err
@@ -391,7 +396,7 @@ func ReadKeyUsage(certType string) (x509.KeyUsage, error) {
 	var res x509.KeyUsage
 	var addRecord = make(map[x509.KeyUsage]bool, len(KeyUsageList))
 
-	fmt.Printf("Now we should setting the key usage.")
+	fmt.Println("Now we should setting the key usage.")
 
 	switch strings.ToLower(certType) {
 	case "ica":
